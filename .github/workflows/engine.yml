@@ -82,11 +82,15 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: Build
-        run: bash engine/scripts/build.sh
+        run: |
+          set -o pipefail
+          bash engine/scripts/build.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: Smoke test (offline render)
         working-directory: engine
-        run: node test/smoke.mjs | tee test/out-smoke.json
+        run: |
+          set -o pipefail
+          node test/smoke.mjs 2>&1 | tee test/out-smoke.json "$RUNNER_TEMP/smoke.log"
 
       - name: Upload build
         if: always()
@@ -98,6 +102,27 @@ jobs:
             engine/test/out
             engine/test/out-smoke.json
           if-no-files-found: warn
+
+      - name: Publish logs to the engine-logs branch
+        if: always() && github.event_name == 'push'
+        env:
+          SRC_BRANCH: ${{ github.ref_name }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          OUT="$RUNNER_TEMP/engine-logs"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          for f in build.log smoke.log; do
+            [[ -f "$RUNNER_TEMP/$f" ]] && tail -n 400 "$RUNNER_TEMP/$f" > "$OUT/$f"
+          done
+          echo "$JOB_STATUS $SRC_BRANCH@$GITHUB_SHA run $GITHUB_RUN_ID" > "$OUT/STATUS"
+          cd "$OUT"
+          git init -q -b engine-logs
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q --allow-empty -m "engine logs: $JOB_STATUS ($SRC_BRANCH@${GITHUB_SHA::7})"
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q --amend --no-edit
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" engine-logs
 
       - name: Publish dist to the engine-dist branch
         if: github.event_name == 'push'
