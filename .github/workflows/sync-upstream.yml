@@ -1,0 +1,194 @@
+name: Sync upstream Penpot MCP
+
+# Keeps the `upstream` branch equal to Penpot's official `mcp/` folder
+# (penpot/penpot) and opens a PR `upstream -> main` whenever it changes.
+#
+# Merge those PRs with "Create a merge commit" (not squash or rebase), so the
+# next sync can merge cleanly on top of your own changes in `main`.
+
+on:
+  schedule:
+    - cron: "23 23 * * *" # daily, 06:23 WIB
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream branch, tag or commit SHA to sync from
+        required: false
+        default: develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/penpot/penpot.git
+  UPSTREAM_WEB: https://github.com/penpot/penpot
+  SYNC_BRANCH: upstream
+  BASE_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check out the upstream branch in a worktree
+        run: |
+          WT="$RUNNER_TEMP/upstream"
+          if git show-ref --verify --quiet "refs/remotes/origin/$SYNC_BRANCH"; then
+            git worktree add -B "$SYNC_BRANCH" "$WT" "origin/$SYNC_BRANCH"
+          else
+            git worktree add --orphan -b "$SYNC_BRANCH" "$WT"
+          fi
+          echo "WT=$WT" >> "$GITHUB_ENV"
+
+      - name: Snapshot upstream mcp/
+        id: snap
+        env:
+          UPSTREAM_REF: ${{ inputs.ref || 'develop' }}
+        run: bash .github/scripts/sync-upstream.sh "$WT"
+
+      - name: Commit to the upstream branch
+        if: steps.snap.outputs.changed == 'true'
+        env:
+          SHA: ${{ steps.snap.outputs.sha }}
+          SHORT: ${{ steps.snap.outputs.short }}
+          PREVIOUS: ${{ steps.snap.outputs.previous }}
+        run: |
+          cd "$WT"
+          git add -A
+          git commit -q \
+            -m "chore(upstream): sync Penpot MCP to $SHORT" \
+            -m "Upstream: penpot/penpot@$SHA" \
+            -m "Previous: ${PREVIOUS:-none}"
+          git log --oneline -1
+
+      - name: Test-merge into main
+        id: merge
+        if: steps.snap.outputs.changed == 'true'
+        run: |
+          if git merge --no-commit --no-ff "$SYNC_BRANCH" > "$RUNNER_TEMP/merge.log" 2>&1; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Merging upstream into main has conflicts; resolve them in the PR."
+            git diff --name-only --diff-filter=U | tee "$RUNNER_TEMP/conflicts.txt"
+          fi
+
+      - name: Set up pnpm
+        if: steps.merge.outputs.conflict == 'false'
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        if: steps.merge.outputs.conflict == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        id: install
+        if: steps.merge.outputs.conflict == 'false'
+        continue-on-error: true
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: pnpm run build
+
+      - name: Test
+        id: test
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: pnpm test
+
+      - name: Undo the test merge
+        if: always() && steps.snap.outputs.changed == 'true'
+        run: git merge --abort || git reset --hard HEAD
+
+      - name: Push the upstream branch
+        if: steps.snap.outputs.changed == 'true'
+        run: git push origin "$SYNC_BRANCH"
+
+      - name: Open or update the sync PR
+        if: steps.snap.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.snap.outputs.sha }}
+          SHORT: ${{ steps.snap.outputs.short }}
+          PREVIOUS: ${{ steps.snap.outputs.previous }}
+          CONFLICT: ${{ steps.merge.outputs.conflict }}
+          INSTALL: ${{ steps.install.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          TEST: ${{ steps.test.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          status() { case "$1" in success) echo "✅ passed";; failure) echo "❌ failed";; *) echo "⏭️ skipped";; esac; }
+
+          if [[ -n "$PREVIOUS" ]]; then
+            CHANGES="[\`${PREVIOUS:0:7}...$SHORT\`]($UPSTREAM_WEB/compare/$PREVIOUS...$SHA)"
+          else
+            CHANGES="[\`$SHORT\`]($UPSTREAM_WEB/commit/$SHA)"
+          fi
+
+          if [[ "$CONFLICT" == "true" ]]; then
+            # shellcheck disable=SC2016 # sed expression, not a shell variable
+            MERGE="⚠️ conflicts with \`$BASE_BRANCH\` in:"$'\n'"$(sed 's/^/  - `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt")"
+          else
+            MERGE="✅ merges cleanly into \`$BASE_BRANCH\`"
+          fi
+
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          Automated sync of Penpot's official MCP (\`mcp/\` in penpot/penpot) into this repo.
+
+          **Upstream:** penpot/penpot@$SHA
+          **Upstream changes since last sync:** $CHANGES ([\`mcp/\` history]($UPSTREAM_WEB/commits/$SHA/mcp))
+
+          ### Checks on the merge result
+          - Merge: $MERGE
+          - Install (\`pnpm install --frozen-lockfile\`): $(status "$INSTALL")
+          - Build: $(status "$BUILD")
+          - Tests: $(status "$TEST")
+
+          [Workflow run]($RUN_URL)
+
+          ### How to merge
+          Use **Create a merge commit** — not squash or rebase — so future syncs keep merging cleanly.
+          If there are conflicts, resolve them locally:
+          \`\`\`bash
+          git fetch origin
+          git checkout $BASE_BRANCH && git pull
+          git merge origin/$SYNC_BRANCH   # resolve, then commit
+          git push
+          \`\`\`
+          EOF
+
+          TITLE="chore(upstream): sync Penpot MCP to $SHORT"
+          PR=$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$PR" ]]; then
+            gh pr edit "$PR" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated PR #$PR"
+          else
+            gh pr create --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Fail the run if checks failed
+        if: steps.snap.outputs.changed == 'true' && (steps.merge.outputs.conflict == 'true' || steps.install.outcome == 'failure' || steps.build.outcome == 'failure' || steps.test.outcome == 'failure')
+        run: |
+          echo "::error::The sync PR was opened, but the merge has conflicts or checks failed. See the PR for details."
+          exit 1
