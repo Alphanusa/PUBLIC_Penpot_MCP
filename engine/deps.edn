@@ -1,0 +1,15 @@
+{:paths ["src"]
+ :deps
+ {;; Penpot sources at the synced upstream commit (fetched by
+  ;; scripts/fetch-penpot.sh into engine/.penpot). The exporter brings `common`
+  ;; transitively through its own deps.edn (:local/root "../common").
+  penpot/exporter {:local/root ".penpot/exporter"}}
+
+ :aliases
+ {:dev
+  {:extra-deps
+   {thheller/shadow-cljs {:mvn/version "3.5.3"}}}
+
+  :shadow-cljs
+  {:main-opts ["-m" "shadow.cljs.devtools.cli"]
+   :jvm-opts ["--sun-misc-unsafe-memory-access=allow"]}}}

@@ -1,0 +1,118 @@
+name: Engine
+
+# Builds the browser-free engine (Penpot common + render-wasm) and runs the
+# offline smoke test. On pushes, the built dist/ is also published to the
+# `engine-dist` branch so it can be fetched without Actions artifact access.
+
+on:
+  push:
+    branches: ["feat/**", main]
+    paths:
+      - "engine/**"
+      - ".upstream-sha"
+      - ".github/workflows/engine.yml"
+  pull_request:
+    paths:
+      - "engine/**"
+      - ".upstream-sha"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMSCRIPTEN_VERSION: "4.0.6"
+  CLOJURE_CLI_VERSION: "1.12.5.1664"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Penpot sources at .upstream-sha
+        run: bash engine/scripts/fetch-penpot.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache Maven, Cargo and emsdk
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/emsdk
+            engine/.penpot/render-wasm/target
+            /tmp/emsdk_cache
+          key: engine-${{ runner.os }}-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('.upstream-sha', 'engine/deps.edn') }}
+          restore-keys: |
+            engine-${{ runner.os }}-${{ env.EMSCRIPTEN_VERSION }}-
+
+      - name: Install emsdk
+        run: |
+          if [[ ! -f ~/emsdk/emsdk ]]; then
+            git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          fi
+          ~/emsdk/emsdk install "$EMSCRIPTEN_VERSION"
+          ~/emsdk/emsdk activate "$EMSCRIPTEN_VERSION"
+          sudo ln -sfn ~/emsdk /opt/emsdk
+
+      - name: Install engine npm deps
+        working-directory: engine
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: bash engine/scripts/build.sh
+
+      - name: Smoke test (offline render)
+        working-directory: engine
+        run: node test/smoke.mjs | tee test/out-smoke.json
+
+      - name: Upload build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-dist
+          path: |
+            engine/dist
+            engine/test/out
+            engine/test/out-smoke.json
+          if-no-files-found: warn
+
+      - name: Publish dist to the engine-dist branch
+        if: github.event_name == 'push'
+        env:
+          SRC_BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          OUT="$RUNNER_TEMP/engine-dist"
+          rm -rf "$OUT" && mkdir -p "$OUT"
+          cp -a engine/dist "$OUT/dist"
+          cp -a engine/test/out "$OUT/test-out" 2>/dev/null || true
+          cp engine/test/out-smoke.json "$OUT/" 2>/dev/null || true
+          cd "$OUT"
+          git init -q -b engine-dist
+          git add -A
+          git commit -q -m "engine dist from $SRC_BRANCH@${GITHUB_SHA::7} (penpot $(cat dist/PENPOT_SHA | cut -c1-7))"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" engine-dist
