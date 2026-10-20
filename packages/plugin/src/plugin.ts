@@ -1,0 +1,192 @@
+import { ExecuteCodeTaskHandler } from "./task-handlers/ExecuteCodeTaskHandler";
+import { Task, TaskHandler } from "./TaskHandler";
+import { formatTaskError } from "./ErrorUtils";
+import type { PluginConnectionInit } from "../../common/src";
+import type { WorkspaceContext } from "@penpot/plugin-types";
+
+/**
+ * indicates whether the plugin is running in an environment with the Penpot-integrated remote MCP server
+ * enabled (as opposed to a local server used with the explicitly loaded plugin)
+ */
+const isIntegratedRemoteMcp = !!mcp;
+
+/**
+ * the management API, which Penpot only exposes to plugins running with global scope;
+ * null otherwise (e.g. in Penpot versions without global plugins)
+ */
+const management = typeof penpotMgmt === "undefined" ? null : penpotMgmt;
+
+/**
+ * Extracts the major.minor.patch prefix from a version string.
+ *
+ * @param version - a version string starting with major.minor.patch
+ * @returns the major.minor.patch prefix, or the original string if it does not match
+ */
+function extractVersionPrefix(version: string): string {
+    const match = version.match(/^(\d+\.\d+\.\d+)/);
+    return match ? match[1] : version;
+}
+
+let uiInitialized = false;
+
+/**
+ * Registry of all available task handlers.
+ */
+const taskHandlers: TaskHandler[] = [new ExecuteCodeTaskHandler()];
+
+// Open the plugin UI (main.ts)
+penpot.ui.open("Penpot MCP Plugin", `?theme=${penpot.theme}`, {
+    width: 236,
+    height: 210,
+    hidden: isIntegratedRemoteMcp,
+} as any);
+
+// Register message handlers
+penpot.ui.onMessage<
+    string | { id: string; type?: string; status?: string; sessionId?: string; task: string; params: any }
+>((message) => {
+    if (typeof message === "object" && message.type === "ui-initialized") {
+        uiInitialized = true;
+        // Inform the UI about the operating mode
+        penpot.ui.sendMessage({
+            type: "mcp-mode",
+            integratedRemoteMcp: isIntegratedRemoteMcp,
+        });
+        // Check Penpot version compatibility
+        const penpotVersionPrefix = penpot.version ? extractVersionPrefix(penpot.version) : "<2.15"; // pre-2.15 versions don't have version info
+        const mcpVersionPrefix = extractVersionPrefix(PENPOT_MCP_VERSION);
+        console.log(`Penpot version: ${penpotVersionPrefix}, MCP version: ${mcpVersionPrefix}`);
+        const isLocalPenpotVersion = penpotVersionPrefix == "0.0.0";
+        if (penpotVersionPrefix !== mcpVersionPrefix && !isLocalPenpotVersion) {
+            penpot.ui.sendMessage({
+                type: "version-mismatch",
+                mcpVersion: mcpVersionPrefix,
+                penpotVersion: penpotVersionPrefix,
+            });
+        }
+        // connect only when requested in this tab
+        if (isIntegratedRemoteMcp && mcp?.isConnectionRequested()) {
+            penpot.ui.sendMessage({
+                type: "start-server",
+                url: mcp?.getServerUrl(),
+                token: mcp?.getToken(),
+            });
+        }
+    } else if (typeof message === "object" && message.type === "connection-metadata-request") {
+        const workspace = currentWorkspace();
+        if (message.sessionId) {
+            const initialization: PluginConnectionInit & { penpotUserSessionId?: string } = {
+                type: "initialize",
+                session: {
+                    sessionId: message.sessionId,
+                    fileId: workspace.fileId,
+                    fileName: workspace.fileName,
+                    workspaceState: workspace.status,
+                },
+                penpotUserSessionId: penpot.currentUser.sessionId,
+            };
+            penpot.ui.sendMessage(initialization);
+        }
+    } else if (typeof message === "object" && message.type === "context-request") {
+        sendWorkspaceContext();
+    } else if (typeof message === "object" && message.type === "update-connection-status") {
+        mcp?.setMcpStatus(message.status || "unknown", message.sessionId);
+    } else if (typeof message === "object" && message.task && message.id) {
+        // Handle plugin tasks submitted by the MCP server
+        handlePluginTaskRequest(message).catch((error) => {
+            console.error("Error in handlePluginTaskRequest:", error);
+        });
+    }
+});
+
+/**
+ * Provides the workspace metadata of this tab.
+ * Without the management API, the metadata is derived from the open file.
+ */
+function currentWorkspace(): WorkspaceContext {
+    if (management) {
+        return management.workspace;
+    }
+    const file = penpot.currentFile;
+    return {
+        status: file ? "ready" : "none",
+        fileId: file?.id ?? null,
+        fileName: file?.name ?? null,
+        teamId: null,
+    };
+}
+
+/** Sends the current workspace metadata without replacing the connection. */
+function sendWorkspaceContext(): void {
+    const workspace = currentWorkspace();
+    penpot.ui.sendMessage({
+        type: "context-update",
+        context: {
+            fileId: workspace.fileId,
+            fileName: workspace.fileName,
+            workspaceState: workspace.status,
+        },
+    });
+}
+
+management?.on("workspacechange", sendWorkspaceContext);
+
+/**
+ * Handles plugin task requests received from the MCP server via WebSocket.
+ *
+ * @param request - The task request containing ID, task type and parameters
+ */
+async function handlePluginTaskRequest(request: { id: string; task: string; params: any }): Promise<void> {
+    console.log("Executing plugin task:", request.task, request.params);
+    const task = new Task(request.id, request.task, request.params);
+
+    // Find the appropriate handler
+    const handler = taskHandlers.find((h) => h.isApplicableTo(task));
+
+    if (handler) {
+        try {
+            // Cast the params to the expected type and handle the task
+            console.log("Processing task with handler:", handler);
+            await handler.handle(task);
+
+            // check whether a response was sent and send a generic success if not
+            if (!task.isResponseSent) {
+                console.warn("Handler did not send a response, sending generic success.");
+                task.sendSuccess("Task completed without a specific response.");
+            }
+
+            console.log("Task handled successfully:", task);
+        } catch (error) {
+            console.error("Error handling task:", error);
+            task.sendError(`Error handling task: ${formatTaskError(error)}`);
+        }
+    } else {
+        console.error("Unknown plugin task:", request.task);
+        task.sendError(`Unknown task type: ${request.task}`);
+    }
+}
+
+if (mcp) {
+    mcp.on("disconnect", async () => {
+        penpot.ui.sendMessage({
+            type: "stop-server",
+        });
+    });
+    mcp.on("connect", async () => {
+        if (!uiInitialized) return;
+        penpot.ui.sendMessage({
+            type: "start-server",
+            url: mcp?.getServerUrl(),
+            token: mcp?.getToken(),
+        });
+    });
+}
+
+// Handle theme change in the iframe
+penpot.on("themechange", (theme) => {
+    penpot.ui.sendMessage({
+        source: "penpot",
+        type: "themechange",
+        theme,
+    });
+});
