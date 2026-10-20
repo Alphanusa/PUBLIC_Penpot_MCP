@@ -129,8 +129,6 @@ jobs:
         env:
           SRC_BRANCH: ${{ github.ref_name }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           OUT="$RUNNER_TEMP/engine-dist"
           rm -rf "$OUT" && mkdir -p "$OUT"
           cp -a engine/dist "$OUT/dist"
@@ -139,5 +137,6 @@ jobs:
           cd "$OUT"
           git init -q -b engine-dist
           git add -A
-          git commit -q -m "engine dist from $SRC_BRANCH@${GITHUB_SHA::7} (penpot $(cat dist/PENPOT_SHA | cut -c1-7))"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "engine dist from $SRC_BRANCH@${GITHUB_SHA::7} (penpot $(cat dist/PENPOT_SHA | cut -c1-7))"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" engine-dist
