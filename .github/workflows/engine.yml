@@ -79,7 +79,7 @@ jobs:
 
       - name: Install engine npm deps
         working-directory: engine
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build
         run: |
