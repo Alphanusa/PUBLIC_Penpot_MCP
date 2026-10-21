@@ -1,0 +1,554 @@
+{
+  "changes": 51,
+  "created": {
+    "desc1": "39bd400c-4cf4-808b-8008-d27ac691ac58",
+    "card1": "39bd400c-4cf4-808b-8008-d27ac690c618",
+    "desc2": "39bd400c-4cf4-808b-8008-d27ac6927164",
+    "price0": "39bd400c-4cf4-808b-8008-d27ac690bd90",
+    "price2": "39bd400c-4cf4-808b-8008-d27ac6922abd",
+    "section": "39bd400c-4cf4-808b-8008-d27ac67968a2",
+    "price1": "39bd400c-4cf4-808b-8008-d27ac691ac56",
+    "title": "39bd400c-4cf4-808b-8008-d27ac68f5440",
+    "name2": "39bd400c-4cf4-808b-8008-d27ac6922abb",
+    "row": "39bd400c-4cf4-808b-8008-d27ac68ffc61",
+    "card0": "39bd400c-4cf4-808b-8008-d27ac6901b17",
+    "name0": "39bd400c-4cf4-808b-8008-d27ac6904008",
+    "desc0": "39bd400c-4cf4-808b-8008-d27ac690bd92",
+    "tmp": "39bd400c-4cf4-808b-8008-d27ac6927166",
+    "card2": "39bd400c-4cf4-808b-8008-d27ac691dcff",
+    "name1": "39bd400c-4cf4-808b-8008-d27ac691154e"
+  },
+  "createdIds": [
+    "39bd400c-4cf4-808b-8008-d27ac67968a2",
+    "39bd400c-4cf4-808b-8008-d27ac68f5440",
+    "39bd400c-4cf4-808b-8008-d27ac68ffc61",
+    "39bd400c-4cf4-808b-8008-d27ac6901b17",
+    "39bd400c-4cf4-808b-8008-d27ac6904008",
+    "39bd400c-4cf4-808b-8008-d27ac690bd90",
+    "39bd400c-4cf4-808b-8008-d27ac690bd92",
+    "39bd400c-4cf4-808b-8008-d27ac690c618",
+    "39bd400c-4cf4-808b-8008-d27ac691154e",
+    "39bd400c-4cf4-808b-8008-d27ac691ac56",
+    "39bd400c-4cf4-808b-8008-d27ac691ac58",
+    "39bd400c-4cf4-808b-8008-d27ac691dcff",
+    "39bd400c-4cf4-808b-8008-d27ac6922abb",
+    "39bd400c-4cf4-808b-8008-d27ac6922abd",
+    "39bd400c-4cf4-808b-8008-d27ac6927164",
+    "39bd400c-4cf4-808b-8008-d27ac6927166"
+  ],
+  "deleted": [
+    "39bd400c-4cf4-808b-8008-d27ac6927166"
+  ],
+  "shapes": [
+    {
+      "y": 0,
+      "sizing": {
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 24,
+          "column-gap": 24
+        },
+        "padding": {
+          "p1": 32,
+          "p2": 32,
+          "p3": 32,
+          "p4": 32
+        }
+      },
+      "name": "Pricing",
+      "fill": "#f4f1ea",
+      "width": 720,
+      "type": "frame",
+      "id": "39bd400c-4cf4-808b-8008-d27ac67968a2",
+      "x": 0,
+      "height": 289
+    },
+    {
+      "y": 32,
+      "name": "Pilih paket",
+      "width": 153,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac68f5440",
+      "x": 32,
+      "height": 38,
+      "text": "Pilih paket"
+    },
+    {
+      "y": 94,
+      "sizing": {
+        "h": "fix",
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "row",
+        "gap": {
+          "row-gap": 16,
+          "column-gap": 16
+        },
+        "padding": {
+          "p1": 0,
+          "p2": 0,
+          "p3": 0,
+          "p4": 0
+        }
+      },
+      "name": "Cards",
+      "width": 656,
+      "type": "frame",
+      "id": "39bd400c-4cf4-808b-8008-d27ac68ffc61",
+      "x": 32,
+      "height": 163
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Basic",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "id": "39bd400c-4cf4-808b-8008-d27ac6901b17",
+      "x": 0,
+      "height": 163
+    },
+    {
+      "y": 20,
+      "name": "Basic",
+      "width": 42,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac6904008",
+      "x": 20,
+      "height": 22,
+      "text": "Basic"
+    },
+    {
+      "y": 50,
+      "name": "Rp 49rb",
+      "width": 97,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac690bd90",
+      "x": 20,
+      "height": 34,
+      "text": "Rp 49rb"
+    },
+    {
+      "y": 92,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk mencoba. Satu proyek dan...",
+      "width": 168,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac690bd92",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk mencoba. Satu proyek dan sampai tiga anggota tim."
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Pro",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "id": "39bd400c-4cf4-808b-8008-d27ac690c618",
+      "x": 224,
+      "height": 163
+    },
+    {
+      "y": 20,
+      "name": "Pro",
+      "width": 29,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac691154e",
+      "x": 20,
+      "height": 22,
+      "text": "Pro"
+    },
+    {
+      "y": 50,
+      "name": "Rp 149rb",
+      "width": 112,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac691ac56",
+      "x": 20,
+      "height": 34,
+      "text": "Rp 149rb"
+    },
+    {
+      "y": 92,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk tim kecil yang butuh...",
+      "width": 168,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac691ac58",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk tim kecil yang butuh proyek tanpa batas dan riwayat versi."
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Bisnis",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "id": "39bd400c-4cf4-808b-8008-d27ac691dcff",
+      "x": 448,
+      "height": 155
+    },
+    {
+      "y": 20,
+      "name": "Bisnis",
+      "width": 47,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac6922abb",
+      "x": 20,
+      "height": 22,
+      "text": "Bisnis"
+    },
+    {
+      "y": 50,
+      "name": "Rp 0",
+      "width": 137,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac6922abd",
+      "x": 20,
+      "height": 26,
+      "text": "Hubungi kami"
+    },
+    {
+      "y": 84,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk organisasi: SSO, audit...",
+      "width": 168,
+      "type": "text",
+      "id": "39bd400c-4cf4-808b-8008-d27ac6927164",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk organisasi: SSO, audit log, dukungan prioritas, dan SLA."
+    }
+  ],
+  "tree": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "type": "root",
+    "children": [
+      {
+        "y": 0,
+        "children": [
+          {
+            "y": 32,
+            "name": "Pilih paket",
+            "width": 153,
+            "type": "text",
+            "id": "39bd400c-4cf4-808b-8008-d27ac68f5440",
+            "x": 32,
+            "height": 38,
+            "text": "Pilih paket"
+          },
+          {
+            "y": 94,
+            "children": [
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Basic",
+                    "width": 42,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac6904008",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Basic"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 49rb",
+                    "width": 97,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac690bd90",
+                    "x": 20,
+                    "height": 34,
+                    "text": "Rp 49rb"
+                  },
+                  {
+                    "y": 92,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk mencoba. Satu proyek dan...",
+                    "width": 168,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac690bd92",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk mencoba. Satu proyek dan sampai tiga anggota tim."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Basic",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "id": "39bd400c-4cf4-808b-8008-d27ac6901b17",
+                "x": 0,
+                "height": 163
+              },
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Pro",
+                    "width": 29,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac691154e",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Pro"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 149rb",
+                    "width": 112,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac691ac56",
+                    "x": 20,
+                    "height": 34,
+                    "text": "Rp 149rb"
+                  },
+                  {
+                    "y": 92,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk tim kecil yang butuh...",
+                    "width": 168,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac691ac58",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk tim kecil yang butuh proyek tanpa batas dan riwayat versi."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Pro",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "id": "39bd400c-4cf4-808b-8008-d27ac690c618",
+                "x": 224,
+                "height": 163
+              },
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Bisnis",
+                    "width": 47,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac6922abb",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Bisnis"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 0",
+                    "width": 137,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac6922abd",
+                    "x": 20,
+                    "height": 26,
+                    "text": "Hubungi kami"
+                  },
+                  {
+                    "y": 84,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk organisasi: SSO, audit...",
+                    "width": 168,
+                    "type": "text",
+                    "id": "39bd400c-4cf4-808b-8008-d27ac6927164",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk organisasi: SSO, audit log, dukungan prioritas, dan SLA."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Bisnis",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "id": "39bd400c-4cf4-808b-8008-d27ac691dcff",
+                "x": 448,
+                "height": 155
+              }
+            ],
+            "sizing": {
+              "h": "fix",
+              "v": "auto"
+            },
+            "layout": {
+              "type": "flex",
+              "direction": "row",
+              "gap": {
+                "row-gap": 16,
+                "column-gap": 16
+              },
+              "padding": {
+                "p1": 0,
+                "p2": 0,
+                "p3": 0,
+                "p4": 0
+              }
+            },
+            "name": "Cards",
+            "width": 656,
+            "type": "frame",
+            "id": "39bd400c-4cf4-808b-8008-d27ac68ffc61",
+            "x": 32,
+            "height": 163
+          }
+        ],
+        "sizing": {
+          "v": "auto"
+        },
+        "layout": {
+          "type": "flex",
+          "direction": "column",
+          "gap": {
+            "row-gap": 24,
+            "column-gap": 24
+          },
+          "padding": {
+            "p1": 32,
+            "p2": 32,
+            "p3": 32,
+            "p4": 32
+          }
+        },
+        "name": "Pricing",
+        "fill": "#f4f1ea",
+        "width": 720,
+        "type": "frame",
+        "id": "39bd400c-4cf4-808b-8008-d27ac67968a2",
+        "x": 0,
+        "height": 289
+      }
+    ]
+  }
+}
