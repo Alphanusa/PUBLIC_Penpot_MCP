@@ -1,0 +1,7 @@
+.penpot/
+node_modules/
+dist/
+.shadow-cljs/
+.cpcache/
+test/out/
+test/out-smoke.json

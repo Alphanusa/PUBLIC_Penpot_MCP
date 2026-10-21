@@ -22,6 +22,7 @@ import { ReadTaigaIssueTool } from "./tools/ReadTaigaIssueTool";
 import { NreplClient } from "./NreplClient";
 import { ReplServer } from "./ReplServer";
 import { ApiDocs } from "./ApiDocs";
+import { createHeadlessTools, HEADLESS_INSTRUCTIONS } from "./headless/tools";
 
 /**
  * Session context for request-scoped data.
@@ -115,7 +116,7 @@ export class PenpotMcpServer {
     private readonly replServer: ReplServer | null;
     private apiDocs: ApiDocs;
     private readonly penpotHighLevelOverview: string;
-    private readonly connectionInstructions: string;
+    private connectionInstructions: string;
 
     /**
      * Carries the user token through each request and its asynchronous tool execution.
@@ -163,6 +164,9 @@ export class PenpotMcpServer {
         this.connectionInstructions = this.configLoader.getBaseInstructions();
 
         this.tools = this.initTools();
+        if (this.tools.some((tool) => tool.name === "edit_page")) {
+            this.connectionInstructions += HEADLESS_INSTRUCTIONS;
+        }
         this.mcpHandler = createMcpHandler(() => this.createMcpServer());
 
         // Enable multi-instance task routing when running in multi-user mode with a
@@ -257,6 +261,7 @@ export class PenpotMcpServer {
             new HighLevelOverviewTool(this),
             new PenpotApiInfoTool(this, this.apiDocs),
             new ExportShapeTool(this),
+            ...createHeadlessTools(this),
         ];
         if (this.isFileSystemAccessEnabled()) {
             toolInstances.push(new ImportImageTool(this));
