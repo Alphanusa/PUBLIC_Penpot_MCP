@@ -1,0 +1,140 @@
+[engine] building render-wasm (export target)
++ setup
++ setup_rust
++ rustup default 1.99.0
+info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-01 for version 1.99.0 (b940084d7 2026-09-28)
+info: downloading 3 components
+info: default toolchain set to 1.99.0-x86_64-unknown-linux-gnu
+
+  1.99.0-x86_64-unknown-linux-gnu installed - rustc 1.99.0 (b940084d7 2026-09-28)
+
++ rustup target add wasm32-unknown-emscripten
+info: downloading component rust-std
++ rustup component add clippy rustfmt --toolchain 1.99.0
+info: downloading 2 components
++ pnpm install
+? Verifying lockfile against supply-chain policies (29 entries)...
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/../.pnpm-store/v11
+  Virtual store is at:             node_modules/.pnpm
+✓ Lockfile passes supply-chain policies (29 entries in 202ms)
+Lockfile is up to date, resolution step is skipped
+Packages: +4
+++++
+Progress: resolved 4, reused 0, downloaded 4, added 4, done
+.../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+
+devDependencies:
++ @types/node 26.3.0
++ esbuild 0.28.2
+
+Done in 293ms using pnpm v12.14.0
++ build
++ set -o pipefail
++ cargo build --message-format=json-render-diagnostics --profile size
++ node ./scripts/cargo-build.cjs target/export/build-info.json /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/Cargo.toml
+   Compiling render v0.1.0 (/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm)
+   Compiling macros v0.1.0 (/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/macros)
+    Finished `size` profile [optimized] target(s) in 41.54s
++ copy_target_artifacts
++ case "$RENDER_TARGET" in
++ copy_artifacts ../exporter/resources/wasm
++ local DEST=../exporter/resources/wasm
++ local SRC
+++ jq -r .artifact_dir -- target/export/build-info.json
++ SRC=/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size
++ mkdir -p -- ../exporter/resources/wasm
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.js ../exporter/resources/wasm/render-wasm.js
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.wasm ../exporter/resources/wasm/render-wasm.wasm
++ '[' -f /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.wasm.map ']'
++ local 'WASM_URL=render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ sed -i 's|render_wasm\.wasm|render-wasm.wasm?version=develop|g' ../exporter/resources/wasm/render-wasm.js
++ '[' export = frontend ']'
++ copy_shared_artifact ../exporter/src/app/wasm/shared.js
++ local DEST=../exporter/src/app/wasm/shared.js
++ local SHARED_FILE
+++ jq -r .shared_file -- target/export/build-info.json
++ SHARED_FILE=/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/build/render-ee22b1ed371cf0e9/out/render_wasm_shared.js
+++ dirname -- ../exporter/src/app/wasm/shared.js
++ mkdir -p -- ../exporter/src/app/wasm
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/build/render-ee22b1ed371cf0e9/out/render_wasm_shared.js ../exporter/src/app/wasm/shared.js
++ '[' -n '' ']'
++ popd
++ release_build_lock
++ [[ 1 == \1 ]]
++ _RENDER_WASM_BUILD_LOCK_HELD=0
++ flock --unlock 9
++ exec
+[engine] building ClojureScript engine
+[:engine] Compiling ...
+[:engine] Build completed. (325 files, 181 compiled, 2 warnings, 25.83s)
+
+[1m------ WARNING #1 - :invalid-arithmetic ----------------------------------------[0m
+ File: /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/src/penpot_mcp/edit.cljs:352:56
+--------------------------------------------------------------------------------
+[2m 349 |   [objects shape op][0m
+[2m 350 |   (let [origin  (parent-origin objects (:parent-id shape))[0m
+[2m 351 |         {:keys [x y]} (:selrect shape)[0m
+[1m 352 |         move-x  (when-let [v (number! (:x op) "x")] (- (+ v (:x origin)) x))[0m
+--------------------------------------------------------------^-----------------
+ [33;1mcljs.core/+, all arguments must be numbers, got [#{nil clj-nil} any] instead[0m
+--------------------------------------------------------------------------------
+[2m 353 |         move-y  (when-let [v (number! (:y op) "y")] (- (+ v (:y origin)) y))[0m
+[2m 354 |         resize? (or (contains? op :width) (contains? op :height))][0m
+[2m 355 |     (when (or move-x move-y resize?)[0m
+[2m 356 |       (cond-> (ctm/empty)[0m
+--------------------------------------------------------------------------------
+
+[1m------ WARNING #2 - :invalid-arithmetic ----------------------------------------[0m
+ File: /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/src/penpot_mcp/edit.cljs:353:56
+--------------------------------------------------------------------------------
+[2m 350 |   (let [origin  (parent-origin objects (:parent-id shape))[0m
+[2m 351 |         {:keys [x y]} (:selrect shape)[0m
+[2m 352 |         move-x  (when-let [v (number! (:x op) "x")] (- (+ v (:x origin)) x))[0m
+[1m 353 |         move-y  (when-let [v (number! (:y op) "y")] (- (+ v (:y origin)) y))[0m
+--------------------------------------------------------------^-----------------
+ [33;1mcljs.core/+, all arguments must be numbers, got [#{nil clj-nil} any] instead[0m
+--------------------------------------------------------------------------------
+[2m 354 |         resize? (or (contains? op :width) (contains? op :height))][0m
+[2m 355 |     (when (or move-x move-y resize?)[0m
+[2m 356 |       (cond-> (ctm/empty)[0m
+[2m 357 |         resize?[0m
+--------------------------------------------------------------------------------
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist:
+total 24648
+drwxr-xr-x  4 runner runner     4096 Oct 21 05:06 .
+drwxr-xr-x 10 runner runner     4096 Oct 21 05:06 ..
+-rw-r--r--  1 runner runner       41 Oct 21 05:06 PENPOT_SHA
+-rw-r--r--  1 runner runner  8576414 Oct 21 05:06 engine.js
+-rw-r--r--  1 runner runner 16639084 Oct 21 05:06 engine.js.map
+drwxr-xr-x  2 runner runner     4096 Oct 21 05:06 fonts
+drwxr-xr-x  2 runner runner     4096 Oct 21 05:06 wasm
+
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist/fonts:
+total 832
+drwxr-xr-x 2 runner runner  4096 Oct 21 05:06 .
+drwxr-xr-x 4 runner runner  4096 Oct 21 05:06 ..
+-rw-r--r-- 1 runner runner 66780 Oct 21 05:06 sourcesanspro-black.ttf
+-rw-r--r-- 1 runner runner 66836 Oct 21 05:06 sourcesanspro-blackitalic.ttf
+-rw-r--r-- 1 runner runner 67412 Oct 21 05:06 sourcesanspro-bold.ttf
+-rw-r--r-- 1 runner runner 67468 Oct 21 05:06 sourcesanspro-bolditalic.ttf
+-rw-r--r-- 1 runner runner 67884 Oct 21 05:06 sourcesanspro-extralight.ttf
+-rw-r--r-- 1 runner runner 69944 Oct 21 05:06 sourcesanspro-extralightitalic.ttf
+-rw-r--r-- 1 runner runner 67036 Oct 21 05:06 sourcesanspro-italic.ttf
+-rw-r--r-- 1 runner runner 67896 Oct 21 05:06 sourcesanspro-light.ttf
+-rw-r--r-- 1 runner runner 69688 Oct 21 05:06 sourcesanspro-lightitalic.ttf
+-rw-r--r-- 1 runner runner 68640 Oct 21 05:06 sourcesanspro-regular.ttf
+-rw-r--r-- 1 runner runner 68016 Oct 21 05:06 sourcesanspro-semibold.ttf
+-rw-r--r-- 1 runner runner 67220 Oct 21 05:06 sourcesanspro-semibolditalic.ttf
+
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist/wasm:
+total 10184
+drwxr-xr-x 2 runner runner     4096 Oct 21 05:06 .
+drwxr-xr-x 4 runner runner     4096 Oct 21 05:06 ..
+-rw-r--r-- 1 runner runner   112080 Oct 21 05:06 render-wasm.js
+-rwxr-xr-x 1 runner runner 10303711 Oct 21 05:06 render-wasm.wasm

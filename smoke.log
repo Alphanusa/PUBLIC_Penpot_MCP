@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "png": {
+    "width": 640,
+    "height": 400,
+    "bytes": 7636
+  },
+  "ms": {
+    "init": 43,
+    "render": 65
+  },
+  "rssMB": 276
+}
