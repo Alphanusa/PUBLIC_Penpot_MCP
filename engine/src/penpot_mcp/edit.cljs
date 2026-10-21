@@ -345,8 +345,8 @@
   [objects shape op]
   (let [origin  (parent-origin objects (:parent-id shape))
         {:keys [x y]} (:selrect shape)
-        move-x  (some-> (number! (:x op) "x") (+ (:x origin)) (- x))
-        move-y  (some-> (number! (:y op) "y") (+ (:y origin)) (- y))
+        move-x  (when-let [v (number! (:x op) "x")] (- (+ v (:x origin)) x))
+        move-y  (when-let [v (number! (:y op) "y")] (- (+ v (:y origin)) y))
         resize? (or (contains? op :width) (contains? op :height))]
     (when (or move-x move-y resize?)
       (cond-> (ctm/empty)

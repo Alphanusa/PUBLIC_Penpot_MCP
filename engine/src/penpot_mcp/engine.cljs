@@ -257,12 +257,12 @@
 
 (defn- reset-on-error
   [promise]
-  (p/merr promise
-          (fn [cause]
+  (p/merr (fn [cause]
             ;; A panic can leave the instance aborted: rebuild next time.
             (when-not (= :invalid-op (:type (ex-data cause)))
               (reset! module* nil))
-            (p/rejected cause))))
+            (p/rejected cause))
+          promise))
 
 (defn- render-ids
   "Renders each id of the loaded scene."
