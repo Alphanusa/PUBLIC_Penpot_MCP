@@ -331,7 +331,11 @@
                       (merge (prop-attrs type* (dissoc op :growType)))
                       (cond-> (= type* :frame) (with-layout (layout-attrs (:layout op))))
                       (cond-> text? (dissoc :position-data)))
-        changes   (pcb/add-object (:changes state) shape)
+        ;; like the workspace (Plugin API appendChild): in a flex/grid board the
+        ;; new child goes to index 0 of :shapes, which is the end of the layout
+        ;; (layout order = layers panel order = reverse of :shapes)
+        changes   (pcb/add-object (:changes state) shape
+                                  (when (ctl/any-layout? parent) {:index 0}))
         state     (cond-> (assoc state :changes changes)
                     (some? ref) (update :refs assoc (str ref) id)
                     true (update :created conj id)
@@ -593,7 +597,9 @@
       :hidden (when (:hidden shape) true)})))
 
 (defn tree
-  "Nested summary of `root-id`'s subtree, at most `max-depth` levels deep."
+  "Nested summary of `root-id`'s subtree, at most `max-depth` levels deep.
+  Children are listed like Penpot's layers panel (top layer first), which in
+  flex boards is also their visual order."
   [objects root-id max-depth]
   (letfn [(walk [id depth]
             (let [shape (get objects id)]
@@ -604,6 +610,7 @@
                   (seq (:shapes shape))
                   (assoc :children
                          (if (< depth max-depth)
-                           (into [] (keep #(walk % (inc depth))) (:shapes shape))
+                           ;; layers panel order (top layer first) = visual order in flex boards
+                           (into [] (keep #(walk % (inc depth))) (rseq (vec (:shapes shape))))
                            (str (count (:shapes shape)) " children (increase depth to see them)")))))))]
     (walk root-id 0)))

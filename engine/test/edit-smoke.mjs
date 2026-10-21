@@ -27,7 +27,9 @@ const ops = [
     { op: "create", type: "text", ref: "title", parent: "section", text: "Pilih paket", fontSize: 32, fontWeight: 700, textColor: "#1F1E1D" },
     {
         op: "create", type: "frame", ref: "row", parent: "section", name: "Cards", width: 656, height: 10, fill: "none",
-        layout: { direction: "row", gap: 16, alignItems: "stretch" }, sizing: { h: "fix", v: "auto" },
+        // note: with alignItems "stretch", Penpot does not let fill-width children size a
+        // hugging row (they only contribute their min height) — same as in the editor
+        layout: { direction: "row", gap: 16, alignItems: "start" }, sizing: { h: "fix", v: "auto" },
     },
     ...plans.flatMap(([name, price, desc], i) => [
         {
@@ -64,6 +66,8 @@ const shape = (ref) => {
     if (!s) throw new Error(`missing shape for ref ${ref}`);
     return s;
 };
+const findNode = (node, id) =>
+    node.id === id ? node : (Array.isArray(node.children) ? node.children : []).reduce((hit, c) => hit ?? findNode(c, id), undefined);
 const fail = [];
 const check = (cond, msg) => cond || fail.push(msg);
 
@@ -84,7 +88,12 @@ for (let i = 1; i < 3; i++) {
 }
 check(descs.every((d) => Math.abs(d.width - (w - 40)) < 0.5), `desc fills card width: ${descs.map((d) => d.width)}`);
 check(descs.every((d) => d.height > 20), `desc wraps to multiple lines: ${descs.map((d) => d.height)}`);
+check(Math.abs(row.height - Math.max(...cards.map((c) => c.height))) < 0.5, `row hugs the tallest card: ${row.height}`);
+check(cards.every((c) => Math.abs(c.y) < 0.5), `cards aligned to the top: ${cards.map((c) => c.y)}`);
 check(Math.abs(section.height - (32 + title.height + 24 + row.height + 32)) < 0.5, `section hugs content: ${section.height}`);
+const childNames = (ref) => (findNode(result.tree, result.created[ref])?.children ?? []).map((c) => c.name);
+check(JSON.stringify(childNames("row")) === JSON.stringify(["Card Basic", "Card Pro", "Card Bisnis"]),
+      `tree lists flex children in visual order: ${childNames("row")}`);
 check(!result.createdIds.includes(undefined) && result.deleted.length === 1, `delete applied: ${result.deleted}`);
 check(shape("price2").text === "Hubungi kami", `update applied: ${shape("price2").text}`);
 

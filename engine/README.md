@@ -23,20 +23,48 @@ is ours; it differs from the exporter in three ways:
 ```js
 import * as engine from "./dist/engine.js";
 
-await engine.init("dist/wasm");                    // load render-wasm once
+await engine.init("dist/wasm", "dist/fonts");      // load render-wasm (+ builtin fonts) once
 
-const png = await engine.renderShape({             // Uint8Array
-  baseUri: "https://penpot.example.com",
-  token: "<user access token>",
-  fileId, pageId, objectId,
-  scale: 1, format: "png",                         // png | jpeg | webp | svg | pdf
-});
+const ctx = { baseUri: "https://penpot.example.com", token: "<access token>" };
 
-const profile = await engine.rpc(                  // any backend RPC command
-  { baseUri, token }, "get-profile", {});
+// read
+await engine.rpc(ctx, "get-profile", {});          // any backend RPC command → plain JS
+await engine.pageSummary({ ...ctx, fileId, pageId, rootId, depth: 4 }); // compact layer tree
 
-const demo = await engine.renderDemo();            // offline: synthetic frame → PNG
+// render (Uint8Array)
+await engine.renderShape({ ...ctx, fileId, pageId, objectId, scale: 1, format: "png" });
+
+// edit: ops → Penpot changes → update-file (one save)
+await engine.applyOps({ ...ctx, fileId, pageId, dryRun: false, ops: [
+  { op: "create", type: "frame", ref: "card", x: 0, y: 0, width: 320, height: 10, fill: "#ffffff",
+    layout: { direction: "column", gap: 8, padding: 16 }, sizing: { v: "hug" } },
+  { op: "create", type: "text", parent: "card", text: "Hello", fontSize: 24, fontWeight: 700 },
+]});
+
+// offline: same ops on an empty in-memory page, rendered (no Penpot needed)
+await engine.applyOpsOffline(ops, { renderRef: "card", scale: 1 });
 ```
+
+`token` must be a Penpot **access token** (Your account → Access tokens; self-hosted
+instances need the `enable-access-tokens` flag). Penpot's API rejects MCP keys.
+
+### How edits are computed
+
+[`src/penpot_mcp/edit.cljs`](src/penpot_mcp/edit.cljs) does what Penpot's workspace does,
+with Penpot's own code:
+
+1. ops → changes with `common`'s changes-builder (which also keeps a local copy of the page);
+2. text sizes (auto-width / auto-height) from render-wasm's text layout with the real fonts;
+3. layouts and constraints with `set-objects-modifiers` + `transform-shape`;
+4. a second pass for auto-height texts whose width a layout just set (e.g. `sizing.h = fill`);
+5. text position data from render-wasm.
+
+The result is a list of changes sent with `update-file`, validated by the backend like any
+edit made in the editor; people with the file open see it live.
+
+Supported now: boards, rectangles, ellipses, texts (builtin font); fills, strokes, radius,
+opacity, visibility, clip; flex layout and child sizing; create/update/delete.
+Not yet: grid layout, components, images, custom fonts for new text, paths, groups.
 
 ## Building
 
@@ -64,6 +92,9 @@ git archive origin/engine-dist dist | tar -x -C engine/
 
 - `test/smoke.mjs` — offline. Boots render-wasm and renders a synthetic frame
   (rounded rect + circle) to a 640×400 PNG. Runs in CI.
+- `test/edit-smoke.mjs` — offline. Builds a pricing section (flex layouts, fill/hug sizing,
+  wrapping text, update + delete ops), checks the computed geometry and renders
+  `test/out/edit.png`. Runs in CI.
 - `test/live.mjs` — against a real Penpot. Needs `PENPOT_URL` and `PENPOT_TOKEN`
   (access token of a **test** account); optional `FILE_ID`, `PAGE_ID`, `OBJECT_ID`,
   otherwise it renders the first board of the first file it finds.
@@ -83,9 +114,6 @@ Offline render verified visually (fills, corner radius, positions, 2× scale).
 
 ## Next
 
-1. Live round-trip against the team's Penpot: `get-page` → render a real board
-   (text with real fonts, images) with an access token.
-2. Edits: build changes with `common` (`changes-builder`, layout modifiers), send
-   them with `update-file`, re-render to verify.
-3. Wire into the MCP server as a headless dispatcher, so `export_shape` and the
-   structured tools work when no plugin/browser is connected.
+1. Live round-trip against the team's Penpot (needs a test account access token).
+2. Per-user credentials (OAuth with Logto) instead of one server-wide token.
+3. More ops: grid layout, components, images, groups; custom team fonts for new text.
