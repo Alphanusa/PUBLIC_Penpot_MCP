@@ -13,7 +13,7 @@ const dist = resolve(here, "../dist");
 const engine = await import(resolve(dist, "engine.js"));
 
 const t0 = performance.now();
-await engine.init(resolve(dist, "wasm"));
+await engine.init(resolve(dist, "wasm"), resolve(dist, "fonts"));
 const t1 = performance.now();
 const png = await engine.renderDemo();
 const t2 = performance.now();

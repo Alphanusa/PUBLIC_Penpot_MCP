@@ -46,7 +46,7 @@ if (!pageId || !objectId) {
     console.log(`page ${pageId}, object ${objectId} (${page.objects[objectId]?.name})`);
 }
 
-await engine.init(resolve(dist, "wasm"));
+await engine.init(resolve(dist, "wasm"), resolve(dist, "fonts"));
 const t0 = performance.now();
 const png = await engine.renderShape({ ...ctx, fileId, pageId, objectId, scale: 1, format: "png" });
 const ms = Math.round(performance.now() - t0);

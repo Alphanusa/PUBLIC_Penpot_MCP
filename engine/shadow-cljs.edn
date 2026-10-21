@@ -8,10 +8,13 @@
 
    :modules
    {:engine
-    {:exports {init        penpot-mcp.engine/init
-               renderShape penpot-mcp.engine/render-shape
-               renderDemo  penpot-mcp.engine/render-demo
-               rpc         penpot-mcp.engine/rpc-js}}}
+    {:exports {init            penpot-mcp.engine/init
+               rpc             penpot-mcp.engine/rpc-js
+               renderShape     penpot-mcp.engine/render-shape
+               pageSummary     penpot-mcp.engine/page-summary
+               applyOps        penpot-mcp.engine/apply-ops
+               applyOpsOffline penpot-mcp.engine/apply-ops-offline
+               renderDemo      penpot-mcp.engine/render-demo}}}
 
    ;; Same resolution settings as Penpot's exporter build.
    :js-options

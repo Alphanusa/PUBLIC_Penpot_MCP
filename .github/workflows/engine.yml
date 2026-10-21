@@ -82,6 +82,7 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Build
+        id: build
         run: |
           set -o pipefail
           bash engine/scripts/build.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
@@ -91,6 +92,12 @@ jobs:
         run: |
           set -o pipefail
           node test/smoke.mjs 2>&1 | tee test/out-smoke.json "$RUNNER_TEMP/smoke.log"
+
+      - name: Edit smoke test (offline edit + layout + render)
+        working-directory: engine
+        run: |
+          set -o pipefail
+          node test/edit-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/edit-smoke.log"
 
       - name: Upload build
         if: always()
@@ -111,7 +118,7 @@ jobs:
         run: |
           OUT="$RUNNER_TEMP/engine-logs"
           rm -rf "$OUT" && mkdir -p "$OUT"
-          for f in build.log smoke.log; do
+          for f in build.log smoke.log edit-smoke.log; do
             [[ -f "$RUNNER_TEMP/$f" ]] && tail -n 400 "$RUNNER_TEMP/$f" > "$OUT/$f"
           done
           echo "$JOB_STATUS $SRC_BRANCH@$GITHUB_SHA run $GITHUB_RUN_ID" > "$OUT/STATUS"
@@ -125,7 +132,7 @@ jobs:
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" engine-logs
 
       - name: Publish dist to the engine-dist branch
-        if: github.event_name == 'push'
+        if: always() && github.event_name == 'push' && steps.build.outcome == 'success'
         env:
           SRC_BRANCH: ${{ github.ref_name }}
         run: |
