@@ -1,0 +1,45 @@
+# Memastikan Dockerfile masih bisa dibangun dan server MCP di dalamnya hidup,
+# untuk PR yang menyentuh image. Tidak mendorong apa pun: image ke registry hanya
+# lewat Release (docs/RILIS.md). Engine tidak dibangun di sini (cukup di engine.yml);
+# image uji ini = mode plugin saja.
+
+name: Image check
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .docker/**
+      - packages/**
+      - pnpm-lock.yaml
+      - .github/scripts/smoke-image.mjs
+      - .github/workflows/image-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: penpot-mcp:check
+
+      - name: Uji image
+        run: |
+          docker run -d --name mcp-check -p 4401:4401 penpot-mcp:check
+          if ! node .github/scripts/smoke-image.mjs http://127.0.0.1:4401 false; then
+            docker logs mcp-check
+            exit 1
+          fi
+          docker rm -f mcp-check

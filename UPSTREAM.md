@@ -63,6 +63,11 @@ runs install/build/tests itself and reports the result in the PR. CI
 ([`ci.yml`](.github/workflows/ci.yml)) still runs on pushes to `main` and on
 PRs opened by people.
 
+## Releases
+
+Images are released from tags only, like PRODUCT_Surveilance_Utility_BE: see
+[docs/RILIS.md](docs/RILIS.md) (Actions → Release, or `.github/scripts/release.sh`).
+
 ## License
 
 MPL-2.0. Internal use and modification is fine. If modified versions of MPL-covered
