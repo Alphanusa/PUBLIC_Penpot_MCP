@@ -1,0 +1,256 @@
+# Rilis berbasis tag — pola yang sama dengan PRODUCT_Surveilance_Utility_BE.
+# Ini satu-satunya jalan yang membangun dan mendorong image ke registry: push dan
+# merge ke branch tidak menerbitkan apa pun. Keputusan dan cara pakainya ada di
+# docs/RILIS.md.
+#
+# Dua pintu masuk, satu berkas. Job `tag` selalu jalan dan menormalkan keduanya jadi
+# satu output `tag` yang dibangun job `build`:
+#   1. formulir workflow_dispatch -> `tag` menghitung versi dan membuat tag-nya
+#   2. `.github/scripts/release.sh` dari laptop -> tag sudah ada, `tag` tinggal meneruskannya
+#
+# Job `tag` dan `build` WAJIB satu berkas dengan `needs:`: tag yang didorong
+# GITHUB_TOKEN tidak memicu workflow lain. Gejalanya menyesatkan kalau dilanggar —
+# tag terbit rapi, image tidak pernah muncul.
+#
+# Sisi lain dari fakta yang sama: job `tag` harus TETAP mendorong dengan
+# GITHUB_TOKEN. Menggantinya dengan PAT membuat tag itu ikut memicu `push: tags:`
+# juga, dan setiap rilis dibangun dua kali.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "'-' = lanjutkan atau promosikan pra-rilis terbuka"
+        type: choice
+        options: ['-', major, minor, patch]
+        default: '-'
+      maturity:
+        description: Tingkat kematangan pra-rilis
+        type: choice
+        options: ['-', alpha, beta, rc]
+        default: '-'
+      variant:
+        description: Penanda tambahan, mis. sso -> v1.0.0-alpha.3-sso (hanya bersama maturity)
+        type: string
+        default: ''
+      ref:
+        description: Kosong = ref dari dropdown. Isi untuk merilis dari branch hotfix.
+        type: string
+        default: ''
+      dry_run:
+        description: Cetak rencana saja, jangan buat tag
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    # Job ini SELALU jalan, di kedua jalur pemicu. Itu yang membuat job `build` cukup
+    # dijaga `needs.tag.outputs.tag != ''`.
+    concurrency:
+      group: release            # yang tidak boleh balapan cuma perhitungan nomor
+      cancel-in-progress: false # versi, bukan build-nya
+    permissions:
+      contents: write   # butuh Settings > Actions > Workflow permissions = Read and write
+    outputs:
+      tag: ${{ steps.from_push.outputs.tag || steps.from_dispatch.outputs.tag }}
+    steps:
+      # Jalur laptop: tag sudah ada, tinggal diteruskan.
+      - name: Teruskan tag yang didorong
+        if: github.event_name == 'push'
+        id: from_push
+        env:
+          PUSHED_TAG: ${{ github.ref_name }}
+        run: printf 'tag=%s\n' "$PUSHED_TAG" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0   # tanpa riwayat tag, hitungan mulai dari nol tanpa mengeluh
+
+      - name: Rencanakan dan tandai
+        if: github.event_name == 'workflow_dispatch'
+        id: from_dispatch
+        # Input teks bebas lewat blok env:, tidak pernah ${{ }} di dalam run:.
+        env:
+          IN_LEVEL: ${{ inputs.level }}
+          IN_MATURITY: ${{ inputs.maturity }}
+          IN_VARIANT: ${{ inputs.variant }}
+          IN_DRY: ${{ inputs.dry_run }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          args=("$IN_LEVEL" "$IN_MATURITY")
+          if [ -n "$IN_VARIANT" ]; then args+=(--variant "$IN_VARIANT"); fi
+          if [ "$IN_DRY" = "true" ]; then args+=(--dry-run); fi
+          ./.github/scripts/release.sh "${args[@]}"
+
+  build:
+    needs: [tag]
+    # Kosong berarti tidak ada yang dirilis: dry-run, atau job `tag` gagal sebelum
+    # menulis output.
+    if: needs.tag.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      REGISTRY: harbor.digicx.id
+      # Versi toolchain engine = versi yang dipakai Penpot sendiri (docker/devenv)
+      EMSCRIPTEN_VERSION: "4.0.6"
+      CLOJURE_CLI_VERSION: "1.12.5.1664"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+          fetch-depth: 0   # describe membandingkan ke SELURUH tag rilis
+
+      - name: Periksa konfigurasi repo
+        env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+        run: |
+          if [ -z "$PROJECT_NAME" ]; then
+            echo "::error::variable PROJECT_NAME kosong — nama image akan jadi '$REGISTRY/'. Isi di Settings > Secrets and variables > Actions > Variables." >&2
+            exit 1
+          fi
+
+      # Satu sumber kebenaran untuk alias: jalur formulir dan jalur push-tag
+      # sama-sama menanyakannya ke skrip yang sama.
+      - name: Baca tag rilis
+        id: meta
+        run: ./.github/scripts/release.sh describe "$TAG"
+
+      - name: Susun daftar tag image
+        id: tags
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ vars.PROJECT_NAME }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          WRITE_LATEST: ${{ steps.meta.outputs.write_latest }}
+          WRITE_STAGING: ${{ steps.meta.outputs.write_staging }}
+        run: |
+          list="$IMAGE:$VERSION"
+          # `latest` hanya untuk final TERTINGGI. Hotfix yang didorong setelah
+          # rilis yang lebih baru tidak boleh memindahkannya ke kode lama.
+          if [ "$WRITE_LATEST" = "true" ]; then list="$list,$IMAGE:latest"; fi
+          # Pra-rilis menggerakkan `staging` untuk uji di luar produksi.
+          if [ "$WRITE_STAGING" = "true" ]; then list="$list,$IMAGE:staging"; fi
+          echo "tags=$list" >>"$GITHUB_OUTPUT"
+          # shellcheck disable=SC2016 # backtick di sed memang teks markdown
+          {
+            echo "### Image"
+            echo
+            printf '%s\n' "$list" | tr ',' '\n' | sed 's/^/- `/; s/$/`/'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # --- Engine tanpa browser (hanya kalau ref ini punya engine/) -----------------
+      - name: Cek engine
+        id: engine
+        run: |
+          if [ -f engine/scripts/build.sh ]; then
+            echo "present=true" >>"$GITHUB_OUTPUT"
+            echo "Engine tanpa browser: ikut dibangun" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "present=false" >>"$GITHUB_OUTPUT"
+            echo "Engine tanpa browser: tidak ada di ref ini (image = mode plugin saja)" >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Ambil sumber Penpot untuk engine
+        if: steps.engine.outputs.present == 'true'
+        run: bash engine/scripts/fetch-penpot.sh
+
+      - uses: actions/setup-java@v4
+        if: steps.engine.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        if: steps.engine.outputs.present == 'true'
+        with:
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        if: steps.engine.outputs.present == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.engine.outputs.present == 'true'
+        with:
+          node-version: 22
+
+      - name: Pasang emsdk
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          ~/emsdk/emsdk install "$EMSCRIPTEN_VERSION"
+          ~/emsdk/emsdk activate "$EMSCRIPTEN_VERSION"
+          sudo ln -sfn ~/emsdk /opt/emsdk
+
+      - name: Bangun engine
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          (cd engine && npm ci --no-audit --no-fund)
+          bash engine/scripts/build.sh
+          (cd engine && node test/smoke.mjs && node test/edit-smoke.mjs)
+
+      - name: Siapkan engine untuk image
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          cp -a engine/dist/. .docker/engine/
+          cp engine/package.json engine/package-lock.json .docker/engine/
+
+      # --- Image -------------------------------------------------------------------
+      - uses: docker/setup-buildx-action@v3
+
+      # Bangun dulu tanpa push, jalankan, dan pastikan server MCP benar-benar hidup.
+      - name: Bangun image (uji)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: penpot-mcp:smoke
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - name: Uji image
+        env:
+          EXPECT_ENGINE: ${{ steps.engine.outputs.present }}
+        run: |
+          docker run -d --name mcp-smoke -p 4401:4401 penpot-mcp:smoke
+          if ! node .github/scripts/smoke-image.mjs http://127.0.0.1:4401 "$EXPECT_ENGINE"; then
+            docker logs mcp-smoke
+            exit 1
+          fi
+          docker rm -f mcp-smoke
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Baca versi Penpot upstream
+        id: upstream
+        run: printf 'sha=%s\n' "$(cat .upstream-sha)" >>"$GITHUB_OUTPUT"
+
+      # Layer sudah ada di builder dari langkah uji, jadi ini hanya mendorong.
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=penpot-mcp
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            id.alphanusa.penpot.upstream-sha=${{ steps.upstream.outputs.sha }}
+            id.alphanusa.penpot-mcp.browser-free=${{ steps.engine.outputs.present }}
