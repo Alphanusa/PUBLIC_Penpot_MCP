@@ -31,7 +31,8 @@ Isi folder:
 Di Logto Console → **Applications → Create application** → **Traditional web**, nama `Penpot`.
 
 - **Redirect URIs**: `https://design.alphanusa.id/api/auth/oidc/callback`
-- **Post sign-out redirect URIs**: `https://design.alphanusa.id/`
+- **Post sign-out redirect URIs**: `https://design.alphanusa.id/` (tidak wajib: logout dari
+  Penpot tidak ikut mengakhiri sesi Logto)
 - Simpan, lalu catat **App ID**, **App secret** dan **Issuer endpoint**
   (bentuknya `https://<domain-logto>/oidc`).
 
@@ -39,8 +40,10 @@ Pastikan user Logto punya **email** (Sign-in experience → identifier email). P
 mengenali user dari emailnya.
 
 Opsional — batasi siapa yang boleh masuk Penpot: buat role `penpot` di Logto
-(**Roles**), berikan ke user yang boleh, lalu isi `PENPOT_OIDC_SCOPES=openid profile email roles`
-dan `PENPOT_OIDC_ROLES=penpot` di `.env`.
+(**Roles**), berikan ke user yang boleh, lalu isi di `.env`:
+`PENPOT_OIDC_SCOPES=openid profile email roles`, `PENPOT_OIDC_ROLES=penpot` dan
+`PENPOT_OIDC_USER_INFO_SOURCE=userinfo` (supaya klaim `roles` dibaca dari endpoint userinfo
+Logto; kalau klaimnya tidak terbaca, semua user ditolak).
 
 ## 2. Siapkan folder di server
 
@@ -81,10 +84,10 @@ Buka **https://design.alphanusa.id** → klik tombol login **Alphanusa** (OpenID
 kali, Penpot menampilkan halaman konfirmasi pendaftaran; setujui, dan akun Penpot dibuat
 otomatis dengan email dari Logto.
 
-## 5. Akses token (untuk MCP tanpa browser nanti)
+## 5. Access token (untuk MCP tanpa browser nanti)
 
-Sudah aktif (`enable-access-tokens`): **Your account → Access tokens**. Belum perlu dipakai
-sekarang.
+Sudah aktif (`enable-access-tokens`): **Your account → Integrations → Access tokens**. Belum
+perlu dipakai sekarang.
 
 ## 6. Tim dan undangan (tanpa SMTP)
 
@@ -93,7 +96,7 @@ dan undang anggota lewat email seperti biasa. Karena tidak ada SMTP, emailnya ti
 link undangan ditulis ke log backend:
 
 ```bash
-docker compose logs penpot-backend | grep -iE "invitation|email" | tail -20
+docker compose logs penpot-backend | grep -E "verify-token|invitation token" | tail -20
 ```
 
 Isi email undangan (dengan link-nya) muncul di log karena `enable-log-emails`; tokennya juga
@@ -106,6 +109,18 @@ https://design.alphanusa.id/#/auth/verify-token?token=<token>
 Kirim link itu ke anggota lewat chat internal. Anggota login lewat Logto dulu, lalu buka link.
 Kalau nanti punya SMTP, tambahkan `enable-smtp` di `PENPOT_EXTRA_FLAGS` dan variabel
 `PENPOT_SMTP_*` (lihat docker-compose resmi Penpot).
+
+> **Perhatian — ganti email tanpa SMTP.** Tanpa SMTP, Penpot mengizinkan user mengganti email
+> akunnya **langsung tanpa verifikasi**. Karena Penpot mencocokkan login Logto dan undangan
+> berdasarkan email, seseorang bisa mengganti emailnya menjadi email rekan yang belum punya
+> akun Penpot, lalu login Logto rekan itu masuk ke akunnya. Ini tidak bisa dimatikan lewat flag.
+> Untuk tim internal yang saling percaya risikonya kecil; cara menutupnya adalah memasang SMTP
+> (verifikasi ganti email kembali aktif). Untuk audit:
+>
+> ```bash
+> docker compose exec penpot-postgres psql -U penpot -d penpot -c \
+>   "select email, fullname, auth_backend, created_at, modified_at from profile order by modified_at desc;"
+> ```
 
 ## 7. Hubungkan Claude lewat MCP (mode plugin)
 
@@ -138,10 +153,11 @@ melindungi dari server rusak.
 
 ```bash
 docker compose up -d penpot-postgres
-gunzip -c backups/penpot-db-XXXX.sql.gz | docker compose exec -T penpot-postgres psql -U penpot -d penpot
+gunzip -c backups/penpot-db-XXXX.sql.gz \
+  | docker compose exec -T penpot-postgres psql -v ON_ERROR_STOP=1 -U penpot -d penpot
 docker compose up -d
-docker compose exec -T penpot-backend sh -c 'rm -rf /opt/data/assets/* && tar -xzf - -C /opt/data' \
-  < backups/penpot-assets-XXXX.tar.gz
+gunzip -c backups/penpot-assets-XXXX.tar.gz \
+  | docker compose exec -T penpot-backend sh -c 'rm -rf /opt/data/assets/* && tar -xf - -C /opt/data'
 ```
 
 ## 9. Upgrade
@@ -162,7 +178,7 @@ Panduannya akan ditambahkan di sini.
 | Log backend: `unable to initialize auth provider` / `invalid-sso-config` | `LOGTO_ISSUER` tanpa `/` di akhir, Logto tidak terjangkau dari container, atau domain Logto mengarah ke IP privat → isi `PENPOT_SSRF_ALLOWED_HOSTS=<domain-logto>` |
 | Logto: `redirect_uri did not match` | Redirect URI di Logto harus persis `https://design.alphanusa.id/api/auth/oidc/callback` |
 | Penpot: `registration-disabled` saat login pertama | `enable-oidc-registration` hilang dari flags |
-| Login ditolak "not enough permissions" | `PENPOT_OIDC_ROLES` diisi tapi user tidak punya role itu, atau scope `roles` tidak diminta |
+| Login ditolak "not enough permissions" | `PENPOT_OIDC_ROLES` diisi tapi user tidak punya role itu, scope `roles` tidak diminta, atau klaim `roles` tidak ada di ID token → `PENPOT_OIDC_USER_INFO_SOURCE=userinfo` |
 | Traefik 404 / sertifikat salah | Cek `TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER`; `docker compose logs penpot-frontend` |
 | Claude: tidak ada tool Penpot / koneksi gagal | Pastikan MCP diaktifkan di Integrations, URL lengkap dengan `userToken`, dan file terbuka dengan **File → MCP Server → Connect** |
 

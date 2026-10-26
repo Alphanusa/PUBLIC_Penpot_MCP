@@ -18,8 +18,9 @@ docker compose exec -T penpot-postgres pg_dump -U penpot -d penpot --no-owner \
   | gzip > "backups/penpot-db-$STAMP.sql.gz"
 
 echo "[$(date -Is)] assets → backups/penpot-assets-$STAMP.tar.gz"
-docker compose exec -T penpot-backend tar -czf - -C /opt/data assets \
-  > "backups/penpot-assets-$STAMP.tar.gz"
+# compressed on the host: the penpot-backend image ships tar but not gzip
+docker compose exec -T penpot-backend tar -cf - -C /opt/data assets \
+  | gzip > "backups/penpot-assets-$STAMP.tar.gz"
 
 # keep the last KEEP_DAYS days
 find backups -name 'penpot-*' -type f -mtime +"$KEEP_DAYS" -delete

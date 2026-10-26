@@ -71,11 +71,11 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK}"
-      - "traefik.http.routers.penpot.rule=Host(`${PENPOT_DOMAIN}`)"
-      - "traefik.http.routers.penpot.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.penpot.tls=true"
-      - "traefik.http.routers.penpot.tls.certresolver=${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in .env}"
-      - "traefik.http.services.penpot.loadbalancer.server.port=8080"
+      - "traefik.http.routers.alphanusa-penpot.rule=Host(`${PENPOT_DOMAIN}`)"
+      - "traefik.http.routers.alphanusa-penpot.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.alphanusa-penpot.tls=true"
+      - "traefik.http.routers.alphanusa-penpot.tls.certresolver=${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in .env}"
+      - "traefik.http.services.alphanusa-penpot.loadbalancer.server.port=8080"
     environment:
       << : [*penpot-flags, *penpot-http-body-size, *penpot-public-uri]
       # Label of the login button
@@ -101,7 +101,8 @@ services:
       PENPOT_OBJECTS_STORAGE_BACKEND: fs
       PENPOT_OBJECTS_STORAGE_FS_DIRECTORY: /opt/data/assets
 
-      # Internal installation: no anonymous usage data sent to Penpot.
+      # Internal installation: no anonymous usage data sent to Penpot. (Penpot still
+      # sends the email of users who explicitly tick its newsletter checkbox.)
       PENPOT_TELEMETRY_ENABLED: "false"
 
       ## Login with Logto (OIDC)
@@ -115,6 +116,10 @@ services:
       # scope above), e.g. PENPOT_OIDC_ROLES=penpot
       PENPOT_OIDC_ROLES: ${PENPOT_OIDC_ROLES:-}
       PENPOT_OIDC_ROLES_ATTR: ${PENPOT_OIDC_ROLES_ATTR:-roles}
+      # Where user claims (email, name, roles) are read from: auto (ID token when
+      # present), userinfo or token. Use "userinfo" with PENPOT_OIDC_ROLES so the
+      # roles claim is read even if Logto leaves it out of the ID token.
+      PENPOT_OIDC_USER_INFO_SOURCE: ${PENPOT_OIDC_USER_INFO_SOURCE:-auto}
 
       # Penpot refuses server-side requests to private IPs (SSRF protection). If the
       # Logto domain resolves to a private/internal IP from this server, list it here,
