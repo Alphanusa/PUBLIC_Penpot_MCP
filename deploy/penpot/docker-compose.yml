@@ -1,0 +1,177 @@
+# Penpot (self-hosted) for Alphanusa — design.alphanusa.id
+#
+# Based on Penpot's official docker-compose (docker/images/docker-compose.yaml at
+# tag 2.18.4), adapted for:
+#   - an existing Traefik (HTTPS) in front, on an external Docker network;
+#   - login only through Logto (OIDC); no password login, no SMTP;
+#   - Penpot's official MCP server (plugin mode) at /mcp/stream on the same domain.
+#
+# All settings live in .env (copy .env.example). See README.md for the steps.
+
+x-flags: &penpot-flags
+  # - login only with Logto (OIDC); new users are created on their first Logto login
+  #   (oidc-registration), password login and password sign-up are disabled
+  # - no SMTP: emails (invitations) are written to the backend log instead
+  # - access-tokens: needed later by the browser-free MCP (Penpot 2.19+)
+  # - mcp: Penpot's official MCP server (Your account → Integrations → MCP Server)
+  PENPOT_FLAGS: >-
+    enable-login-with-oidc
+    enable-oidc-registration
+    disable-registration
+    disable-login-with-password
+    disable-email-verification
+    enable-log-emails
+    enable-log-invitation-tokens
+    enable-access-tokens
+    enable-mcp
+    ${PENPOT_EXTRA_FLAGS:-}
+
+x-uri: &penpot-public-uri
+  PENPOT_PUBLIC_URI: https://${PENPOT_DOMAIN:?set PENPOT_DOMAIN in .env}
+
+x-body-size: &penpot-http-body-size
+  PENPOT_HTTP_SERVER_MAX_BODY_SIZE: 367001600
+  PENPOT_HTTP_SERVER_MAX_MULTIPART_BODY_SIZE: 367001600
+
+x-secret-key: &penpot-secret-key
+  PENPOT_SECRET_KEY: ${PENPOT_SECRET_KEY:?set PENPOT_SECRET_KEY in .env}
+
+x-database: &penpot-database
+  PENPOT_DATABASE_URI: postgresql://penpot-postgres/penpot
+  PENPOT_DATABASE_USERNAME: penpot
+  PENPOT_DATABASE_PASSWORD: ${PENPOT_DB_PASSWORD:?set PENPOT_DB_PASSWORD in .env}
+
+networks:
+  penpot:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:?set TRAEFIK_NETWORK in .env}
+
+volumes:
+  penpot_postgres_v15:
+  penpot_assets:
+
+services:
+  penpot-frontend:
+    image: "penpotapp/frontend:${PENPOT_VERSION:-2.18.4}"
+    restart: always
+    # Not published on the host: Traefik reaches it on the traefik network.
+    # For a quick local test without Traefik, uncomment:
+    # ports:
+    #   - 9001:8080
+    volumes:
+      - penpot_assets:/opt/data/assets
+    depends_on:
+      - penpot-backend
+      - penpot-mcp
+      - penpot-exporter
+    networks:
+      - penpot
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      - "traefik.http.routers.penpot.rule=Host(`${PENPOT_DOMAIN}`)"
+      - "traefik.http.routers.penpot.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.penpot.tls=true"
+      - "traefik.http.routers.penpot.tls.certresolver=${TRAEFIK_CERTRESOLVER:?set TRAEFIK_CERTRESOLVER in .env}"
+      - "traefik.http.services.penpot.loadbalancer.server.port=8080"
+    environment:
+      << : [*penpot-flags, *penpot-http-body-size, *penpot-public-uri]
+      # Label of the login button
+      PENPOT_OIDC_NAME: ${PENPOT_OIDC_NAME:-Alphanusa}
+
+  penpot-backend:
+    image: "penpotapp/backend:${PENPOT_VERSION:-2.18.4}"
+    restart: always
+    volumes:
+      - penpot_assets:/opt/data/assets
+    depends_on:
+      penpot-postgres:
+        condition: service_healthy
+      penpot-valkey:
+        condition: service_healthy
+    networks:
+      - penpot
+    environment:
+      << : [*penpot-flags, *penpot-public-uri, *penpot-http-body-size, *penpot-secret-key, *penpot-database]
+
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
+
+      PENPOT_OBJECTS_STORAGE_BACKEND: fs
+      PENPOT_OBJECTS_STORAGE_FS_DIRECTORY: /opt/data/assets
+
+      # Internal installation: no anonymous usage data sent to Penpot.
+      PENPOT_TELEMETRY_ENABLED: "false"
+
+      ## Login with Logto (OIDC)
+      PENPOT_OIDC_CLIENT_ID: ${LOGTO_CLIENT_ID:?set LOGTO_CLIENT_ID in .env}
+      PENPOT_OIDC_CLIENT_SECRET: ${LOGTO_CLIENT_SECRET:?set LOGTO_CLIENT_SECRET in .env}
+      # Logto issuer WITH a trailing slash, e.g. https://auth.alphanusa.id/oidc/
+      # (Penpot appends ".well-known/openid-configuration" to it)
+      PENPOT_OIDC_BASE_URI: ${LOGTO_ISSUER:?set LOGTO_ISSUER in .env}
+      PENPOT_OIDC_SCOPES: ${PENPOT_OIDC_SCOPES:-openid profile email}
+      # Optional: only users with these Logto roles may log in (needs the "roles"
+      # scope above), e.g. PENPOT_OIDC_ROLES=penpot
+      PENPOT_OIDC_ROLES: ${PENPOT_OIDC_ROLES:-}
+      PENPOT_OIDC_ROLES_ATTR: ${PENPOT_OIDC_ROLES_ATTR:-roles}
+
+      # Penpot refuses server-side requests to private IPs (SSRF protection). If the
+      # Logto domain resolves to a private/internal IP from this server, list it here,
+      # e.g. PENPOT_SSRF_ALLOWED_HOSTS=auth.alphanusa.id
+      PENPOT_SSRF_ALLOWED_HOSTS: ${PENPOT_SSRF_ALLOWED_HOSTS:-}
+
+  # Penpot's official MCP server (plugin mode). The frontend proxies it at
+  # https://<domain>/mcp/stream (AI clients) and /mcp/ws (the plugin in the browser).
+  penpot-mcp:
+    image: "penpotapp/mcp:${PENPOT_VERSION:-2.18.4}"
+    restart: always
+    networks:
+      - penpot
+
+  penpot-exporter:
+    image: "penpotapp/exporter:${PENPOT_VERSION:-2.18.4}"
+    restart: always
+    depends_on:
+      penpot-valkey:
+        condition: service_healthy
+    networks:
+      - penpot
+    environment:
+      << : [*penpot-flags, *penpot-secret-key, *penpot-public-uri]
+      PENPOT_INTERNAL_URI: http://penpot-frontend:8080
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
+
+  penpot-postgres:
+    image: "postgres:15"
+    restart: always
+    stop_signal: SIGINT
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U penpot"]
+      interval: 2s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    volumes:
+      - penpot_postgres_v15:/var/lib/postgresql/data
+    networks:
+      - penpot
+    environment:
+      - POSTGRES_INITDB_ARGS=--data-checksums
+      - POSTGRES_DB=penpot
+      - POSTGRES_USER=penpot
+      - POSTGRES_PASSWORD=${PENPOT_DB_PASSWORD}
+
+  penpot-valkey:
+    image: valkey/valkey:8.1
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep PONG"]
+      interval: 1s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    networks:
+      - penpot
+    environment:
+      - VALKEY_EXTRA_FLAGS=--maxmemory 128mb --maxmemory-policy volatile-lfu
