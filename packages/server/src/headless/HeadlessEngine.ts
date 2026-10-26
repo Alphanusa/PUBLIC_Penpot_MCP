@@ -1,0 +1,83 @@
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createLogger } from "../logger";
+import { Semaphore } from "../utils/Semaphore";
+
+/** Penpot backend location + credentials for one call. */
+export interface PenpotContext {
+    baseUri: string;
+    token: string;
+}
+
+/** The JS API of the browser-free engine (engine/dist/engine.js). */
+export interface PenpotEngineModule {
+    init(artifactDir: string, fontsDir?: string): Promise<boolean>;
+    rpc(ctx: PenpotContext, command: string, params?: Record<string, unknown>): Promise<any>;
+    renderShape(
+        opts: PenpotContext & {
+            fileId: string;
+            pageId: string;
+            objectId: string;
+            scale?: number;
+            format?: "png" | "jpeg" | "webp" | "svg" | "pdf";
+        }
+    ): Promise<Uint8Array>;
+    pageSummary(
+        opts: PenpotContext & { fileId: string; pageId?: string; rootId?: string; depth?: number }
+    ): Promise<any>;
+    applyOps(opts: PenpotContext & { fileId: string; pageId?: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
+}
+
+/**
+ * Lazily loads the browser-free Penpot engine (Penpot's `common` + render-wasm compiled
+ * for Node, see `engine/` at the repository root) and serializes the calls that use its
+ * single WASM render state.
+ */
+export class HeadlessEngine {
+    private static readonly logger = createLogger("HeadlessEngine");
+
+    private modulePromise?: Promise<PenpotEngineModule>;
+
+    /** render-wasm keeps one design state per process: one render/edit at a time. */
+    private readonly wasmGate = new Semaphore("headless-engine", 1);
+
+    constructor(public readonly dir: string) {}
+
+    /**
+     * Finds the engine build: `PENPOT_MCP_ENGINE_DIR`, else `engine/dist` next to the server
+     * package (repository layout), else `engine` next to the server bundle (Docker image).
+     */
+    public static locate(env: Record<string, string | undefined> = process.env): string | undefined {
+        // an explicit setting wins, even when it points nowhere (no silent fallback)
+        const candidates = env.PENPOT_MCP_ENGINE_DIR
+            ? [env.PENPOT_MCP_ENGINE_DIR]
+            : [resolve(process.cwd(), "../../engine/dist"), resolve(process.cwd(), "engine")];
+        return candidates.find((dir) => existsSync(join(dir, "engine.js")));
+    }
+
+    private load(): Promise<PenpotEngineModule> {
+        if (!this.modulePromise) {
+            this.modulePromise = (async () => {
+                const mod = (await import(pathToFileURL(join(this.dir, "engine.js")).href)) as PenpotEngineModule;
+                await mod.init(join(this.dir, "wasm"), join(this.dir, "fonts"));
+                HeadlessEngine.logger.info("Browser-free Penpot engine loaded from %s", this.dir);
+                return mod;
+            })();
+            // a failed load must not be cached forever
+            this.modulePromise.catch(() => (this.modulePromise = undefined));
+        }
+        return this.modulePromise;
+    }
+
+    /** Calls that only talk to the backend (no WASM state). */
+    public async backend<T>(fn: (engine: PenpotEngineModule) => Promise<T>): Promise<T> {
+        return fn(await this.load());
+    }
+
+    /** Calls that load a scene into render-wasm (render, edit). */
+    public async wasm<T>(fn: (engine: PenpotEngineModule) => Promise<T>): Promise<T> {
+        const engine = await this.load();
+        return this.wasmGate.withPermit(() => fn(engine));
+    }
+}
