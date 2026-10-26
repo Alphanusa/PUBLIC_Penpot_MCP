@@ -129,7 +129,7 @@ Sekali saja:
 - **Settings → Actions → General → Workflow permissions = Read and write.** Kalau
   masih read-only, job `tag` gagal saat push tag.
 - **Variable `PROJECT_NAME`** (Settings → Secrets and variables → Actions → Variables):
-  nama repositori image di Harbor, mis. `alphanusa/penpot-mcp`. Kalau kosong, workflow
+  nama repositori image di Harbor, mis. `service/penpot-mcp`. Kalau kosong, workflow
   berhenti dengan pesan yang jelas.
 - **Secret `HARBOR_USERNAME` dan `HARBOR_PASSWORD`**, di repo ini atau di tingkat
   organisasi dengan akses ke repo ini. Kalau tidak ada, tag tetap terbit tapi job
