@@ -31,6 +31,8 @@ export interface RefreshGrant {
     sub: string;
     clientId: string;
     scope: string;
+    /** When the person signed in with the identity provider (ms); refreshing does not extend it. */
+    authTime: number;
     expiresAt: number;
 }
 
@@ -41,7 +43,12 @@ interface VaultData {
     refreshTokens: Record<string, RefreshGrant>;
 }
 
-const emptyData = (): VaultData => ({ version: 1, users: {}, clients: {}, refreshTokens: {} });
+const emptyData = (): VaultData => ({
+    version: 1,
+    users: Object.create(null),
+    clients: Object.create(null),
+    refreshTokens: Object.create(null),
+});
 
 export const sha256 = (value: string) => createHash("sha256").update(value).digest("base64url");
 
@@ -86,7 +93,14 @@ export class Vault {
             const decipher = createDecipheriv("aes-256-gcm", this.key, iv);
             decipher.setAuthTag(tag);
             const json = Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8");
-            this.data = { ...emptyData(), ...JSON.parse(json) };
+            const parsed = JSON.parse(json);
+            // null-prototype maps: ids such as "__proto__" are plain missing keys
+            this.data = {
+                version: 1,
+                users: Object.assign(Object.create(null), parsed.users),
+                clients: Object.assign(Object.create(null), parsed.clients),
+                refreshTokens: Object.assign(Object.create(null), parsed.refreshTokens),
+            };
         } catch {
             throw new Error(
                 `Cannot decrypt ${this.file}: PENPOT_MCP_SECRET_KEY differs from the one it was written with. ` +
@@ -101,15 +115,20 @@ export class Vault {
             if (grant.expiresAt <= now) delete this.data.refreshTokens[hash];
         }
         const snapshot = JSON.stringify(this.data);
-        this.writes = this.writes.then(async () => {
-            const iv = randomBytes(12);
-            const cipher = createCipheriv("aes-256-gcm", this.key, iv);
-            const body = Buffer.concat([cipher.update(snapshot, "utf8"), cipher.final()]);
-            const tmp = `${this.file}.${process.pid}.tmp`;
-            await fs.writeFile(tmp, Buffer.concat([iv, cipher.getAuthTag(), body]), { mode: 0o600 });
-            await fs.rename(tmp, this.file);
-        });
-        return this.writes;
+        // A failed write must not poison the queue: later writes still run (and carry
+        // the full state, so the disk catches up), while the caller sees its own failure.
+        const write = this.writes
+            .catch(() => undefined)
+            .then(async () => {
+                const iv = randomBytes(12);
+                const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+                const body = Buffer.concat([cipher.update(snapshot, "utf8"), cipher.final()]);
+                const tmp = `${this.file}.${process.pid}.tmp`;
+                await fs.writeFile(tmp, Buffer.concat([iv, cipher.getAuthTag(), body]), { mode: 0o600 });
+                await fs.rename(tmp, this.file);
+            });
+        this.writes = write;
+        return write;
     }
 
     getUser(sub: string): LinkedUser | undefined {
@@ -123,6 +142,16 @@ export class Vault {
 
     getClient(clientId: string): RegisteredClient | undefined {
         return this.data.clients[clientId];
+    }
+
+    /** Forgets clients older than `maxAgeMs` that hold no refresh token (registered but never used). */
+    async pruneUnusedClients(maxAgeMs: number): Promise<void> {
+        const inUse = new Set(Object.values(this.data.refreshTokens).map((grant) => grant.clientId));
+        const cutoff = Date.now() - maxAgeMs;
+        for (const [id, client] of Object.entries(this.data.clients)) {
+            if (!inUse.has(id) && client.createdAt * 1000 < cutoff) delete this.data.clients[id];
+        }
+        await this.persist();
     }
 
     clientCount(): number {
@@ -139,9 +168,14 @@ export class Vault {
         return grant && grant.expiresAt > Date.now() ? grant : undefined;
     }
 
-    /** Replaces `previous` (when given) with `token` in one write: refresh tokens rotate. */
-    async putRefreshGrant(token: string, grant: RefreshGrant, previous?: string): Promise<void> {
-        if (previous) delete this.data.refreshTokens[sha256(previous)];
+    /**
+     * Stores `token` and retires `previous` (refresh tokens rotate). The previous token
+     * keeps working for `graceMs`, so a client whose response got lost, or that
+     * refreshed twice at once, is not disconnected.
+     */
+    async putRefreshGrant(token: string, grant: RefreshGrant, previous?: string, graceMs = 0): Promise<void> {
+        const old = previous ? this.data.refreshTokens[sha256(previous)] : undefined;
+        if (old) old.expiresAt = Math.min(old.expiresAt, Date.now() + graceMs);
         this.data.refreshTokens[sha256(token)] = grant;
         await this.persist();
     }

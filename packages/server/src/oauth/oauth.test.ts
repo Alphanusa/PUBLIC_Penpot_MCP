@@ -93,6 +93,27 @@ test("the vault is encrypted and refuses a different key", async () => {
     }
 });
 
+test("one failed vault write does not block the following ones", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "vault-"));
+    const fs = await import("node:fs");
+    try {
+        const vault = new Vault(dir, SECRET);
+        await vault.load();
+        const user = { email: "a@example.com", penpotToken: "t", penpotEmail: "a@example.com", updatedAt: "now" };
+        const blocker = path.join(dir, `oauth-vault.bin.${process.pid}.tmp`);
+        fs.mkdirSync(blocker); // the temp file cannot be written: EISDIR
+        await assert.rejects(vault.saveUser("u1", user));
+        fs.rmdirSync(blocker);
+        await vault.saveUser("u2", user);
+
+        const reloaded = new Vault(dir, SECRET);
+        await reloaded.load();
+        assert.ok(reloaded.getUser("u1") && reloaded.getUser("u2"), "the next write carries everything");
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 // ------------------------------------------------------------ end to end
 
 /** Fake identity provider (Logto) and fake Penpot backend in one express app. */
@@ -212,12 +233,12 @@ describe("OAuth connect flow", () => {
     }
 
     /** Walks authorize → identity provider → callback; returns the consent page and its cookie. */
-    async function startAuthorization(clientId: string, verifier: string) {
+    async function startAuthorization(clientId: string, verifier: string, redirectUri = REDIRECT) {
         const authorize = new URL(`${mcpBase}/mcp/oauth/authorize`);
         authorize.search = new URLSearchParams({
             response_type: "code",
             client_id: clientId,
-            redirect_uri: REDIRECT,
+            redirect_uri: redirectUri,
             code_challenge: s256(verifier),
             code_challenge_method: "S256",
             state: "client-state",
@@ -226,10 +247,13 @@ describe("OAuth connect flow", () => {
         }).toString();
         const toIdp = await fetch(authorize, { redirect: "manual" });
         assert.equal(toIdp.status, 302);
+        const cookie = toIdp.headers.get("set-cookie")?.split(";")[0];
         const toCallback = await fetch(toIdp.headers.get("location")!, { redirect: "manual" });
-        const callback = await fetch(toCallback.headers.get("location")!, { redirect: "manual" });
+        const callback = await fetch(toCallback.headers.get("location")!, {
+            redirect: "manual",
+            headers: cookie ? { Cookie: cookie } : {},
+        });
         const html = await callback.text();
-        const cookie = callback.headers.get("set-cookie")?.split(";")[0];
         const request = html.match(/name="request" value="([^"]+)"/)?.[1];
         return { status: callback.status, html, cookie, request };
     }
@@ -407,12 +431,35 @@ describe("OAuth connect flow", () => {
             client_id: client.client_id,
         });
         assert.equal(refreshed.status, 200);
-        const rotated = await exchange({
+        const retried = await exchange({
             grant_type: "refresh_token",
             refresh_token: tokens.refresh_token,
             client_id: client.client_id,
         });
-        assert.equal(rotated.status, 400, "refresh tokens rotate");
+        assert.equal(retried.status, 200, "the previous refresh token survives a short grace period");
+
+        const later = Date.now() + 61_000;
+        const realNow = Date.now;
+        Date.now = () => later;
+        try {
+            const rotated = await exchange({
+                grant_type: "refresh_token",
+                refresh_token: tokens.refresh_token,
+                client_id: client.client_id,
+            });
+            assert.equal(rotated.status, 400, "refresh tokens rotate");
+
+            const fresh = ((await refreshed.json()) as any).refresh_token;
+            Date.now = () => realNow() + 31 * 24 * 60 * 60 * 1000;
+            const tooOld = await exchange({
+                grant_type: "refresh_token",
+                refresh_token: fresh,
+                client_id: client.client_id,
+            });
+            assert.equal(tooOld.status, 400, "the login expires after 30 days however often it is refreshed");
+        } finally {
+            Date.now = realNow;
+        }
     });
 
     test("a confidential client must authenticate at the token endpoint", async () => {
@@ -447,10 +494,53 @@ describe("OAuth connect flow", () => {
         assert.match(await res.text(), /someone-else@example\.com/);
     });
 
+    test("a login link forwarded to another browser cannot be completed", async () => {
+        const client = await registerClient();
+        const authorize = new URL(`${mcpBase}/mcp/oauth/authorize`);
+        authorize.search = new URLSearchParams({
+            response_type: "code",
+            client_id: client.client_id,
+            redirect_uri: REDIRECT,
+            code_challenge: s256("v".repeat(43)),
+            code_challenge_method: "S256",
+            state: "attacker-state",
+        }).toString();
+        const toIdp = await fetch(authorize, { redirect: "manual" });
+        // the victim opens the identity provider link without the starter's cookie
+        const toCallback = await fetch(toIdp.headers.get("location")!, { redirect: "manual" });
+        const callback = await fetch(toCallback.headers.get("location")!, { redirect: "manual" });
+        assert.equal(callback.status, 400);
+        assert.match(await callback.text(), /kedaluwarsa/);
+    });
+
+    test("loopback redirects may use another port, odd input is a 4xx not a 500", async () => {
+        const client = await registerClient();
+        const consent = await startAuthorization(client.client_id, "v".repeat(43), "http://localhost:40000/callback");
+        assert.equal(consent.status, 200);
+
+        const proto = await fetch(`${mcpBase}/mcp/oauth/authorize?client_id=__proto__&redirect_uri=x`);
+        assert.equal(proto.status, 400);
+        const repeated = await fetch(
+            `${mcpBase}/mcp/oauth/authorize?client_id=${client.client_id}&redirect_uri=${encodeURIComponent(REDIRECT)}` +
+                "&response_type=code&code_challenge=c&code_challenge_method=S256&resource=a&resource=b",
+            { redirect: "manual" }
+        );
+        assert.equal(repeated.status, 302, "repeated parameters are ignored, not a crash");
+        const badBasic = await fetch(`${mcpBase}/mcp/oauth/token`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                Authorization: `Basic ${Buffer.from("%E0%A4%A:x").toString("base64")}`,
+            },
+            body: "grant_type=refresh_token&refresh_token=x",
+        });
+        assert.equal(badBasic.status, 401);
+    });
+
     test("the consent form only works from the browser that signed in", async () => {
         const client = await registerClient();
         const consent = await startAuthorization(client.client_id, "v".repeat(43));
-        const res = await submitConsent(consent.request!, "penpot_mcp_consent=stolen", {
+        const res = await submitConsent(consent.request!, `${consent.cookie!.split("=")[0]}=stolen`, {
             decision: "allow",
             penpot_token: "good-token",
         });

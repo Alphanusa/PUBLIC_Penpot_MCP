@@ -23,6 +23,7 @@ export async function fetchPenpotProfile(
 ): Promise<PenpotProfile | null> {
     const res = await fetchFn(`${penpotUrl}/api/rpc/command/get-profile`, {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: {
             Authorization: `Token ${token}`,
             Accept: "application/json",

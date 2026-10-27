@@ -11,8 +11,10 @@ Login aktif kalau `PENPOT_MCP_OIDC_ISSUER` diisi. Dalam mode ini:
   dan jawaban itulah yang membuat aplikasi AI membuka halaman login.
 - Tool tanpa browser memakai token Penpot milik orang yang login. `PENPOT_ACCESS_TOKEN`
   diabaikan, jadi tidak ada akun bersama.
-- Tool mode plugin memakai MCP key yang disimpan di halaman persetujuan, jadi URL tidak
-  perlu `?userToken=` lagi.
+- Tool mode plugin memakai MCP key yang disimpan di halaman persetujuan. `?userToken=` di
+  URL diabaikan.
+- Server harus jalan dengan `--multi-user`. Ini sudah default di image; kalau tidak, server
+  menolak start.
 
 ## Alurnya
 
@@ -23,7 +25,7 @@ Claude ──► /mcp/stream                         401 + alamat metadata
        ──► /mcp/oauth/register                 Claude mendaftar sebagai klien
 browser ─► /mcp/oauth/authorize ─► Logto (login) ─► /mcp/oauth/callback
         ─► halaman "Izinkan?" (+ token Penpot pertama kali) ─► kembali ke Claude
-Claude ──► /mcp/oauth/token                    token akses 1 jam + token refresh 30 hari
+Claude ──► /mcp/oauth/token                    token akses 1 jam + token refresh
 ```
 
 Yang diperiksa di halaman persetujuan:
@@ -32,8 +34,12 @@ Yang diperiksa di halaman persetujuan:
   kosong, semua akun Logto boleh.
 - **Token Penpot.** Token dicek langsung ke Penpot, dan email akun Penpot-nya harus sama
   dengan email Logto. Pengguna tidak bisa menyambungkan akun Penpot milik orang lain.
-- **Browser.** Formulir persetujuan hanya berlaku di browser yang tadi login, karena
-  dicek lewat cookie.
+- **Browser.** Login hanya bisa diselesaikan di browser yang memulainya (dicek lewat
+  cookie). Tautan login yang diteruskan ke orang lain tidak bisa dipakai.
+
+Login berlaku **paling lama 30 hari**. Token refresh diputar setiap kali dipakai, tapi
+tidak memperpanjang batas itu. Setelah 30 hari, Claude membuka halaman login lagi, dan
+role di Logto diperiksa ulang saat itu.
 
 ## Pasang
 
@@ -127,7 +133,7 @@ Di halaman persetujuan pertama, tempel:
 | Mau apa | Caranya |
 |---|---|
 | Hentikan akses seseorang **sekarang juga** | Hapus access token-nya di Penpot (oleh orangnya, atau hapus/blokir akunnya). Semua tool tanpa browser langsung gagal untuk orang itu. |
-| Cegah dia menyambung ulang | Cabut role-nya di Logto. Token refresh yang sudah terbit tetap berlaku sampai 30 hari, jadi lakukan juga langkah di atas. |
+| Cegah dia menyambung ulang | Cabut role-nya di Logto. Login yang sudah ada tetap berlaku sampai batas 30 harinya habis, jadi lakukan juga langkah di atas. |
 | Ganti token Penpot sendiri | Sambungkan ulang connector, buka **Ganti token** di halaman persetujuan. |
 | Putuskan semua orang | Hapus `oauth-vault.bin` di volume `penpot_mcp_data`, lalu restart `penpot-mcp`. |
 
@@ -146,6 +152,11 @@ Di halaman persetujuan pertama, tempel:
 | `PENPOT_MCP_DATA_DIR` | tidak | Default `/opt/penpot-mcp/data` di image |
 | `PENPOT_MCP_OAUTH_REDIRECT_URIS` | tidak | Alamat kembali yang boleh didaftarkan klien. Default: callback claude.ai/claude.com dan `http://localhost` / `http://127.0.0.1` (port bebas, untuk Claude Code) |
 | `PENPOT_MCP_RESOURCE_URL` | tidak | Default `${PENPOT_MCP_PUBLIC_URL}/mcp/stream` |
+
+**Batasan mode plugin.** MCP key tidak dicek ke akun Penpot mana pun (Penpot tidak
+menyediakan cara mengeceknya). Orang yang tahu MCP key orang lain bisa mengarahkan tool
+plugin ke tab Penpot orang itu. Perlakukan MCP key seperti kata sandi. Tool tanpa browser
+tidak terkena batasan ini.
 
 Kalau login aktif tapi ada variabel wajib yang kosong, server berhenti saat start dengan
 pesan yang menyebut variabel mana yang kurang. Server tidak akan jalan dalam keadaan

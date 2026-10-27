@@ -8,6 +8,8 @@ export interface UpstreamIdentity {
     roles: string[];
 }
 
+const TIMEOUT_MS = 10_000;
+
 interface Discovery {
     authorization_endpoint: string;
     token_endpoint: string;
@@ -33,7 +35,7 @@ export class UpstreamOidc {
     private discover(): Promise<Discovery> {
         if (!this.discovery) {
             const url = `${this.config.oidc.issuer}/.well-known/openid-configuration`;
-            this.discovery = this.fetchFn(url)
+            this.discovery = this.fetchFn(url, { signal: AbortSignal.timeout(TIMEOUT_MS) })
                 .then(async (res) => {
                     if (!res.ok) throw new Error(`OpenID discovery failed: HTTP ${res.status} from ${url}`);
                     return (await res.json()) as Discovery;
@@ -70,6 +72,7 @@ export class UpstreamOidc {
         ).toString("base64");
         const tokenRes = await this.fetchFn(token_endpoint, {
             method: "POST",
+            signal: AbortSignal.timeout(TIMEOUT_MS),
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
                 Accept: "application/json",
@@ -90,6 +93,7 @@ export class UpstreamOidc {
         }
 
         const infoRes = await this.fetchFn(userinfo_endpoint, {
+            signal: AbortSignal.timeout(TIMEOUT_MS),
             headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: "application/json" },
         });
         if (!infoRes.ok) throw new Error(`userinfo failed: HTTP ${infoRes.status}`);

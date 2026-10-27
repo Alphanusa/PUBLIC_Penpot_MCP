@@ -170,6 +170,10 @@ export class PenpotMcpServer {
         this.connectionInstructions = this.configLoader.getBaseInstructions();
 
         const oauthConfig = loadOAuthConfig();
+        if (oauthConfig && !this.isMultiUser) {
+            // single-user mode routes every plugin task to one shared connection
+            throw new Error("The OAuth login (PENPOT_MCP_OIDC_ISSUER) requires --multi-user");
+        }
         this.authServer = oauthConfig ? new AuthServer(oauthConfig) : null;
 
         this.tools = this.initTools();
@@ -317,10 +321,8 @@ export class PenpotMcpServer {
             if (this.authServer) {
                 const caller = this.authServer.authenticate(req, res);
                 if (!caller) return;
-                context = {
-                    userToken: caller.user.mcpKey ?? context.userToken,
-                    penpotToken: caller.user.penpotToken,
-                };
+                // only the signed-in person's own MCP key, never one from the URL
+                context = { userToken: caller.user.mcpKey, penpotToken: caller.user.penpotToken };
             }
             this.logger.info(
                 `Received MCP request: method=${req.body?.method ?? "<none>"}; userTokenFp=${PenpotMcpServer.tokenFingerprint(context.userToken)}`

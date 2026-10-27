@@ -149,3 +149,29 @@ export function isRedirectUriAllowed(candidate: string, allowed: string[]): bool
         return candidate === entry;
     });
 }
+
+const isLoopback = (url: URL) => url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname);
+
+/**
+ * Whether a redirect URI sent in a request matches one the client registered: exactly,
+ * or for loopback redirects with any port (RFC 8252 §7.3; native clients pick a free port).
+ */
+export function redirectUriMatches(registered: string, requested: string): boolean {
+    if (registered === requested) return true;
+    try {
+        const a = new URL(registered);
+        const b = new URL(requested);
+        return (
+            isLoopback(a) &&
+            isLoopback(b) &&
+            a.hostname === b.hostname &&
+            a.pathname === b.pathname &&
+            a.search === b.search &&
+            !b.username &&
+            !b.password &&
+            !b.hash
+        );
+    } catch {
+        return false;
+    }
+}
