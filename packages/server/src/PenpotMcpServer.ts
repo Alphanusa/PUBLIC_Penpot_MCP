@@ -23,12 +23,16 @@ import { NreplClient } from "./NreplClient";
 import { ReplServer } from "./ReplServer";
 import { ApiDocs } from "./ApiDocs";
 import { createHeadlessTools, HEADLESS_INSTRUCTIONS } from "./headless/tools";
+import { AuthServer } from "./oauth/AuthServer";
+import { loadOAuthConfig } from "./oauth/config";
 
 /**
  * Session context for request-scoped data.
  */
 export interface SessionContext {
     userToken?: string;
+    /** Penpot access token of the signed-in user (OAuth mode). */
+    penpotToken?: string;
 }
 
 /**
@@ -117,6 +121,8 @@ export class PenpotMcpServer {
     private apiDocs: ApiDocs;
     private readonly penpotHighLevelOverview: string;
     private connectionInstructions: string;
+    /** Built-in OAuth server; set when PENPOT_MCP_OIDC_ISSUER is configured. */
+    private readonly authServer: AuthServer | null;
 
     /**
      * Carries the user token through each request and its asynchronous tool execution.
@@ -162,6 +168,13 @@ export class PenpotMcpServer {
         instructions = instructions.replace("$api_types", this.apiDocs.getTypeNames().join(", "));
         this.penpotHighLevelOverview = instructions;
         this.connectionInstructions = this.configLoader.getBaseInstructions();
+
+        const oauthConfig = loadOAuthConfig();
+        if (oauthConfig && !this.isMultiUser) {
+            // single-user mode routes every plugin task to one shared connection
+            throw new Error("The OAuth login (PENPOT_MCP_OIDC_ISSUER) requires --multi-user");
+        }
+        this.authServer = oauthConfig ? new AuthServer(oauthConfig) : null;
 
         this.tools = this.initTools();
         if (this.tools.some((tool) => tool.name === "edit_page")) {
@@ -302,12 +315,19 @@ export class PenpotMcpServer {
 
     private setupHttpEndpoints(): void {
         const handleMcpRequest = toNodeHandler(this.mcpHandler);
+        this.authServer?.install(this.app);
         this.app.all("/mcp", async (req, res) => {
-            const userToken = req.query.userToken as string | undefined;
+            let context: SessionContext = { userToken: req.query.userToken as string | undefined };
+            if (this.authServer) {
+                const caller = this.authServer.authenticate(req, res);
+                if (!caller) return;
+                // only the signed-in person's own MCP key, never one from the URL
+                context = { userToken: caller.user.mcpKey, penpotToken: caller.user.penpotToken };
+            }
             this.logger.info(
-                `Received MCP request: method=${req.body?.method ?? "<none>"}; userTokenFp=${PenpotMcpServer.tokenFingerprint(userToken)}`
+                `Received MCP request: method=${req.body?.method ?? "<none>"}; userTokenFp=${PenpotMcpServer.tokenFingerprint(context.userToken)}`
             );
-            await this.sessionContext.run({ userToken }, () => handleMcpRequest(req, res, req.body));
+            await this.sessionContext.run(context, () => handleMcpRequest(req, res, req.body));
         });
     }
 
@@ -315,6 +335,10 @@ export class PenpotMcpServer {
         const { default: express } = await import("express");
         this.app = express();
         this.app.use(express.json());
+        if (this.authServer) {
+            this.app.use(express.urlencoded({ extended: false }));
+            await this.authServer.init();
+        }
 
         this.setupHttpEndpoints();
 
@@ -327,6 +351,9 @@ export class PenpotMcpServer {
                 this.logger.info(`Remote mode: ${this.isRemoteMode()}`);
                 this.logger.info(`DevEnv mode: ${this.isDevEnv()}`);
                 this.logger.info(`Modern Streamable HTTP endpoint: http://${this.host}:${this.port}/mcp`);
+                this.logger.info(
+                    `OAuth (login with the identity provider): ${this.authServer ? "enabled" : "disabled"}`
+                );
                 this.logger.info(`WebSocket server URL: ws://${this.host}:${this.webSocketPort}`);
 
                 // start the REPL server when enabled

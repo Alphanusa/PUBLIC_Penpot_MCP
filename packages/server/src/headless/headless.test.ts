@@ -144,3 +144,24 @@ test("missing credentials produce a clear message", async () => {
     const res = await byName(tools, "list_files").execute({});
     assert.match(res.content[0].text, /PENPOT_URL and PENPOT_ACCESS_TOKEN/);
 });
+
+test("in OAuth mode the request's own token is used, never a server-wide one", async () => {
+    const env = {
+        PENPOT_MCP_ENGINE_DIR: fakeEngineDir(),
+        PENPOT_URL: "http://penpot",
+        PENPOT_ACCESS_TOKEN: "shared-token",
+        PENPOT_MCP_OIDC_ISSUER: "https://id.example/oidc",
+    };
+    let current: string | undefined;
+    const server = { ...fakeServer, getSessionContext: () => ({ penpotToken: current }) } as any;
+    const tools = createHeadlessTools(server, env);
+
+    const anonymous = await byName(tools, "list_files").execute({});
+    assert.match(anonymous.content[0].text, /No Penpot account is linked/);
+
+    current = "user-token";
+    await byName(tools, "list_files").execute({});
+    const rpcCalls = fake().calls.filter((c) => c[0] === "rpc");
+    assert.ok(rpcCalls.length > 0);
+    assert.ok(rpcCalls.every((c) => c[3].token === "user-token"));
+});
