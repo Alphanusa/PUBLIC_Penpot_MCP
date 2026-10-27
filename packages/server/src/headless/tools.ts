@@ -292,7 +292,7 @@ export function createHeadlessTools(
     const dir = HeadlessEngine.locate(env);
     if (!dir) return [];
     const engine = new HeadlessEngine(dir);
-    const credentials = new PenpotCredentials(env);
+    const credentials = new PenpotCredentials(env, () => mcpServer.getSessionContext?.()?.penpotToken);
     return [
         new ListFilesTool(mcpServer, engine, credentials),
         new PageOverviewTool(mcpServer, engine, credentials),

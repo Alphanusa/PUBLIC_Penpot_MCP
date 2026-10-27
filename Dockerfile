@@ -45,7 +45,13 @@ COPY .docker/engine/ ./engine/
 RUN if [ -f engine/package.json ]; then \
       cd engine && npm ci --omit=dev --no-audit --no-fund; \
     fi \
- && rm -f engine/.keep
+ && rm -f engine/.keep \
+ && mkdir -p data && chown node:node data
+
+# Encrypted store of the OAuth login (linked Penpot tokens, clients, refresh tokens).
+# Mount a volume here so people stay connected across container updates.
+ENV PENPOT_MCP_DATA_DIR=/opt/penpot-mcp/data
+VOLUME ["/opt/penpot-mcp/data"]
 
 USER node
 

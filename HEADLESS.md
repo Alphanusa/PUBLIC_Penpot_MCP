@@ -37,10 +37,14 @@ plugin session is connected.
    The browser-free tools are registered when `engine/dist/engine.js` is found (or
    `PENPOT_MCP_ENGINE_DIR` points to a build). `PENPOT_MCP_HEADLESS=false` disables them.
 
+`PENPOT_ACCESS_TOKEN` is for a single person running the server for themselves. A shared
+server must not use it: the MCP endpoint would let anyone act as that account. Use the
+built-in login instead ([docs/LOGIN.md](docs/LOGIN.md)): each person signs in with the
+company identity provider and links their own Penpot account once; `PENPOT_ACCESS_TOKEN`
+is then ignored.
+
 ## Limits (for now)
 
-- One Penpot account per server (`PENPOT_ACCESS_TOKEN`). Per-user login with Logto (OAuth)
-  is the next step.
 - Supported shapes/properties: see "Supported now" in [engine/README.md](engine/README.md);
   grid layout, components, images, groups and custom fonts for new text are not yet supported.
 - Renders and edits share one render-wasm instance and run one at a time.
@@ -52,5 +56,7 @@ All additions are new files, so syncing with upstream stays easy:
 - `engine/` — the browser-free engine (ClojureScript on top of Penpot's sources at
   `.upstream-sha`), built and tested by `.github/workflows/engine.yml`.
 - `packages/server/src/headless/` — the MCP tools and engine loader.
-- One upstream file touched: `packages/server/src/PenpotMcpServer.ts` (registers the tools and
-  appends a paragraph to the connection instructions).
+- `packages/server/src/oauth/` — the built-in login (OAuth authorization server).
+- One upstream file touched: `packages/server/src/PenpotMcpServer.ts` (registers the tools,
+  appends a paragraph to the connection instructions, and checks the login on `/mcp` when
+  it is enabled).
