@@ -73,6 +73,19 @@ Isi App ID dan App secret aplikasi itu ke variabel di bawah.
       PENPOT_MCP_OIDC_ROLES: ${PENPOT_OIDC_ROLES:-}
       PENPOT_MCP_OIDC_ROLES_ATTR: ${PENPOT_OIDC_ROLES_ATTR:-roles}
       PENPOT_MCP_SECRET_KEY: ${PENPOT_MCP_SECRET_KEY:?set PENPOT_MCP_SECRET_KEY}
+      PENPOT_MCP_TEAM: Alphanusa
+    depends_on:
+      penpot-mcp-init:
+        condition: service_completed_successfully
+
+  # Server MCP berjalan sebagai user node (uid 1000). Service ini memastikan volume
+  # datanya milik user itu; tanpa ini server bisa menolak start ("not writable").
+  penpot-mcp-init:
+    image: alpine:3.20
+    command: chown -R 1000:1000 /data
+    volumes:
+      - penpot_mcp_data:/data
+    restart: "no"
 ```
 
 Lalu tambahkan `penpot_mcp_data:` di bagian `volumes:` paling bawah.
@@ -149,6 +162,7 @@ Di halaman persetujuan pertama, tempel:
 | `PENPOT_MCP_OIDC_SCOPES` | tidak | Default `openid profile email`; samakan dengan Penpot kalau memakai role |
 | `PENPOT_MCP_OIDC_ROLES` | tidak | Role yang boleh (cukup salah satu), mis. `nzk9krh9ex0c:Developer` |
 | `PENPOT_MCP_OIDC_ROLES_ATTR` | tidak | Klaim role, default `roles`; untuk role organisasi `organization_roles` |
+| `PENPOT_MCP_TEAM` | tidak | Team Penpot tempat AI bekerja, mis. `Alphanusa`. `list_files` hanya menampilkan team itu, dan AI diinstruksikan tidak memakai team lain atau Drafts. Berlaku untuk semua orang yang memakai server ini. |
 | `PENPOT_MCP_DATA_DIR` | tidak | Default `/opt/penpot-mcp/data` di image |
 | `PENPOT_MCP_OAUTH_REDIRECT_URIS` | tidak | Alamat kembali yang boleh didaftarkan klien. Default: callback claude.ai/claude.com dan `http://localhost` / `http://127.0.0.1` (port bebas, untuk Claude Code) |
 | `PENPOT_MCP_RESOURCE_URL` | tidak | Default `${PENPOT_MCP_PUBLIC_URL}/mcp/stream` |

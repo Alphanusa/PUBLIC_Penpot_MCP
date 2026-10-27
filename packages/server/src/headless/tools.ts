@@ -45,7 +45,13 @@ export class ListFilesArgs {
 export class ListFilesTool extends HeadlessTool<ListFilesArgs> {
     private static readonly MAX_FILES = 200;
 
-    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+    constructor(
+        mcpServer: PenpotMcpServer,
+        engine: HeadlessEngine,
+        credentials: PenpotCredentials,
+        /** When set, only projects of this team are listed (PENPOT_MCP_TEAM). */
+        private readonly team?: string
+    ) {
         super(mcpServer, ListFilesArgs.schema, engine, credentials);
     }
 
@@ -54,7 +60,8 @@ export class ListFilesTool extends HeadlessTool<ListFilesArgs> {
     }
 
     public getToolDescription(): string {
-        return `Lists the Penpot projects and files the user can access, with their ids. ${BROWSER_FREE}`;
+        const scope = this.team ? ` Only the team "${this.team}" is listed.` : "";
+        return `Lists the Penpot projects and files the user can access, with their ids.${scope} ${BROWSER_FREE}`;
     }
 
     protected async executeCore(args: ListFilesArgs): Promise<ToolResponse> {
@@ -67,6 +74,7 @@ export class ListFilesTool extends HeadlessTool<ListFilesArgs> {
             const projects: any[] = await engine.rpc(ctx, "get-all-projects", {});
             for (const project of projects ?? []) {
                 if (project["deleted-at"]) continue;
+                if (this.team && String(project["team-name"] ?? "").toLowerCase() !== this.team.toLowerCase()) continue;
                 const files: any[] = await engine.rpc(ctx, "get-project-files", { "project-id": project.id });
                 const matching = (files ?? []).filter(
                     (f) =>
@@ -86,7 +94,10 @@ export class ListFilesTool extends HeadlessTool<ListFilesArgs> {
         });
 
         if (!lines.length) {
-            return new TextResponse(needle ? `No files match "${args.search}".` : "No files found for this account.");
+            const where = this.team ? ` in the team "${this.team}"` : "";
+            return new TextResponse(
+                needle ? `No files match "${args.search}"${where}.` : `No files found${where || " for this account"}.`
+            );
         }
         if (count > ListFilesTool.MAX_FILES) {
             lines.push(`(only the first ${ListFilesTool.MAX_FILES} files are listed; use search to narrow down)`);
@@ -294,7 +305,7 @@ export function createHeadlessTools(
     const engine = new HeadlessEngine(dir);
     const credentials = new PenpotCredentials(env, () => mcpServer.getSessionContext?.()?.penpotToken);
     return [
-        new ListFilesTool(mcpServer, engine, credentials),
+        new ListFilesTool(mcpServer, engine, credentials, env.PENPOT_MCP_TEAM?.trim() || undefined),
         new PageOverviewTool(mcpServer, engine, credentials),
         new RenderShapeTool(mcpServer, engine, credentials),
         new EditPageTool(mcpServer, engine, credentials),
@@ -307,3 +318,17 @@ export const HEADLESS_INSTRUCTIONS =
     "work directly against the Penpot backend, without the Penpot MCP plugin and without opening Penpot in a " +
     "browser. Prefer them when no plugin session is connected. Typical flow: list_files → get_page_overview → " +
     "edit_page → render_shape (only when you need to see the result).";
+
+/**
+ * Connection instructions that keep the AI in one Penpot team (PENPOT_MCP_TEAM),
+ * for both the browser-free and the plugin tools. Empty when no team is set.
+ */
+export function teamInstructions(env: Record<string, string | undefined> = process.env): string {
+    const team = env.PENPOT_MCP_TEAM?.trim();
+    if (!team) return "";
+    return (
+        `\n\nAlways work in the Penpot team "${team}": only open, edit or create files in that team's projects ` +
+        `(never in Drafts or another team). If no file or project in "${team}" fits the request, ask the user ` +
+        "instead of using another team."
+    );
+}

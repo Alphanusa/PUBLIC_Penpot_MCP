@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
 /** A person who connected an AI client, keyed by the identity provider's `sub`. */
@@ -76,6 +76,7 @@ export class Vault {
 
     /** Loads the store; a missing file starts empty. */
     async load(): Promise<void> {
+        await this.checkWritable();
         let raw: Buffer;
         try {
             raw = await fs.readFile(this.file);
@@ -105,6 +106,21 @@ export class Vault {
             throw new Error(
                 `Cannot decrypt ${this.file}: PENPOT_MCP_SECRET_KEY differs from the one it was written with. ` +
                     "Restore the old key, or delete the file to start over (everyone then reconnects)."
+            );
+        }
+    }
+
+    /** Fails at startup, not at the first login, when the data directory cannot be written. */
+    private async checkWritable(): Promise<void> {
+        const dir = path.dirname(this.file);
+        try {
+            await fs.mkdir(dir, { recursive: true });
+            await fs.access(dir, fsConstants.W_OK);
+        } catch {
+            const uid = typeof process.getuid === "function" ? process.getuid() : "?";
+            throw new Error(
+                `The data directory ${dir} is not writable by this process (uid ${uid}). ` +
+                    `Give it to that user, e.g. docker run --rm -v <volume>:/data alpine chown -R ${uid}:${uid} /data`
             );
         }
     }
