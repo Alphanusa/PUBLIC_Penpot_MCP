@@ -57,7 +57,7 @@ Isi App ID dan App secret aplikasi itu ke variabel di bawah.
 
 ```yaml
   penpot-mcp:
-    image: "harbor.digicx.id/service/penpot-mcp:v1.0.0-alpha.2"
+    image: "ghcr.io/alphanusa/penpot-mcp:v1.0.0-alpha.3"
     restart: always
     networks:
       - penpot

@@ -12,9 +12,8 @@ Ubah lembar ini dulu sebelum mengubah skrip atau workflow-nya.
 Artefak            : satu image MCP server → Dockerfile di root
                      + engine tanpa browser, kalau ref yang dirilis punya engine/
 Bentuk tag         : vX.Y.Z   (tanpa prefiks artefak)
-Registry           : harbor.digicx.id/${PROJECT_NAME}
-                     secret: HARBOR_USERNAME / HARBOR_PASSWORD
-                     variable: PROJECT_NAME
+Registry           : ghcr.io/alphanusa/penpot-mcp (GitHub Container Registry)
+                     push dengan GITHUB_TOKEN; tidak perlu secret atau variable
 Tag image          : vX.Y.Z  (immutable)  ← selalu
                      latest  (mutable)    ← hanya final DAN tertinggi
                      staging (mutable)    ← hanya pra-rilis
@@ -103,7 +102,7 @@ Di `deploy/penpot/docker-compose.yml`, service `penpot-mcp` diganti:
 
 ```yaml
   penpot-mcp:
-    image: harbor.digicx.id/${PROJECT_NAME}:latest
+    image: ghcr.io/alphanusa/penpot-mcp:latest
 ```
 
 ```sh
@@ -118,7 +117,7 @@ yang terpasang (pluginnya ada di frontend Penpot). Cek label
 `id.alphanusa.penpot.upstream-sha` sebelum memakai image di produksi:
 
 ```sh
-docker image inspect harbor.digicx.id/${PROJECT_NAME}:latest \
+docker image inspect ghcr.io/alphanusa/penpot-mcp:latest \
   --format '{{ index .Config.Labels "id.alphanusa.penpot.upstream-sha" }}'
 ```
 
@@ -128,16 +127,11 @@ Sekali saja:
 
 - **Settings → Actions → General → Workflow permissions = Read and write.** Kalau
   masih read-only, job `tag` gagal saat push tag.
-- **Variable `PROJECT_NAME`** (Settings → Secrets and variables → Actions → Variables):
-  nama repositori image di Harbor, mis. `alphanusa/penpot-mcp`. Kalau kosong, workflow
-  berhenti dengan pesan yang jelas.
-- **Secret `HARBOR_USERNAME` dan `HARBOR_PASSWORD`**, di repo ini atau di tingkat
-  organisasi dengan akses ke repo ini. Kalau tidak ada, tag tetap terbit tapi job
-  `build` gagal saat login.
-
-### Harbor
-
-- **Tag immutability** untuk repositori `${PROJECT_NAME}`, pola `v*` (`latest` dan
-  `staging` tetap mutable).
-- **Retention** wajib **mengecualikan `v*`**, supaya instruksi rollback tidak menunjuk
-  image yang sudah dihapus.
+- **Visibilitas package.** Setelah rilis pertama ke GHCR, buka package `penpot-mcp` di
+  halaman organisasi (tab **Packages**) → **Package settings**:
+  - **Change visibility → Public**, supaya server bisa `docker pull` tanpa login. Repo
+    ini sudah publik, jadi isinya tidak rahasia.
+  - Kalau tetap **Private**, server perlu `docker login ghcr.io` sekali dengan akun
+    GitHub dan personal access token (classic) ber-scope `read:packages`.
+- **Hapus versi lama dengan hati-hati.** GHCR tidak menghapus apa pun otomatis. Jangan
+  hapus versi `v*` yang mungkin dipakai untuk rollback.
