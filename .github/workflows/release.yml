@@ -100,9 +100,10 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: write   # push ke GitHub Container Registry dengan GITHUB_TOKEN
     env:
       TAG: ${{ needs.tag.outputs.tag }}
-      REGISTRY: harbor.digicx.id
+      REGISTRY: ghcr.io
       # Versi toolchain engine = versi yang dipakai Penpot sendiri (docker/devenv)
       EMSCRIPTEN_VERSION: "4.0.6"
       CLOJURE_CLI_VERSION: "1.12.5.1664"
@@ -112,14 +113,9 @@ jobs:
           ref: ${{ needs.tag.outputs.tag }}
           fetch-depth: 0   # describe membandingkan ke SELURUH tag rilis
 
-      - name: Periksa konfigurasi repo
-        env:
-          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
-        run: |
-          if [ -z "$PROJECT_NAME" ]; then
-            echo "::error::variable PROJECT_NAME kosong — nama image akan jadi '$REGISTRY/'. Isi di Settings > Secrets and variables > Actions > Variables." >&2
-            exit 1
-          fi
+      # ghcr.io/<owner>/penpot-mcp; nama di GHCR wajib huruf kecil.
+      - name: Tentukan nama image
+        run: echo "IMAGE=$REGISTRY/${GITHUB_REPOSITORY_OWNER,,}/penpot-mcp" >>"$GITHUB_ENV"
 
       # Satu sumber kebenaran untuk alias: jalur formulir dan jalur push-tag
       # sama-sama menanyakannya ke skrip yang sama.
@@ -130,7 +126,6 @@ jobs:
       - name: Susun daftar tag image
         id: tags
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ vars.PROJECT_NAME }}
           VERSION: ${{ steps.meta.outputs.version }}
           WRITE_LATEST: ${{ steps.meta.outputs.write_latest }}
           WRITE_STAGING: ${{ steps.meta.outputs.write_staging }}
@@ -232,8 +227,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Baca versi Penpot upstream
         id: upstream
