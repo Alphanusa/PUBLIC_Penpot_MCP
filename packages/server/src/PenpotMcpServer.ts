@@ -22,7 +22,7 @@ import { ReadTaigaIssueTool } from "./tools/ReadTaigaIssueTool";
 import { NreplClient } from "./NreplClient";
 import { ReplServer } from "./ReplServer";
 import { ApiDocs } from "./ApiDocs";
-import { createHeadlessTools, HEADLESS_INSTRUCTIONS, teamInstructions } from "./headless/tools";
+import { createHeadlessTools, HEADLESS_INSTRUCTIONS } from "./headless/tools";
 import { AuthServer } from "./oauth/AuthServer";
 import { loadOAuthConfig } from "./oauth/config";
 
@@ -180,7 +180,6 @@ export class PenpotMcpServer {
         if (this.tools.some((tool) => tool.name === "edit_page")) {
             this.connectionInstructions += HEADLESS_INSTRUCTIONS;
         }
-        this.connectionInstructions += teamInstructions();
         this.mcpHandler = createMcpHandler(() => this.createMcpServer());
 
         // Enable multi-instance task routing when running in multi-user mode with a

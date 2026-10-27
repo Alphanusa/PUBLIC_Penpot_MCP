@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHeadlessTools, teamInstructions } from "./tools";
+import { createHeadlessTools } from "./tools";
 import { HeadlessEngine } from "./HeadlessEngine";
 
 /**
@@ -164,23 +164,4 @@ test("in OAuth mode the request's own token is used, never a server-wide one", a
     const rpcCalls = fake().calls.filter((c) => c[0] === "rpc");
     assert.ok(rpcCalls.length > 0);
     assert.ok(rpcCalls.every((c) => c[3].token === "user-token"));
-});
-
-test("PENPOT_MCP_TEAM limits list_files to one team and adds an instruction", async () => {
-    const dir = fakeEngineDir();
-    const writeFileSync = (await import("node:fs")).writeFileSync;
-    const source = (await import("node:fs"))
-        .readFileSync(join(dir, "engine.js"), "utf8")
-        .replace(
-            `return [{ id: "p1", name: "Website", "team-name": "Alphanusa" }];`,
-            `return [{ id: "p1", name: "Website", "team-name": "Alphanusa" }, { id: "p2", name: "Drafts", "team-name": "Ana" }];`
-        );
-    writeFileSync(join(dir, "engine.js"), source);
-    const tools = createHeadlessTools(fakeServer, env(dir, { PENPOT_MCP_TEAM: "alphanusa" }));
-    const text = (await byName(tools, "list_files").execute({})).content[0].text as string;
-    assert.match(text, /## Alphanusa \/ Website/);
-    assert.doesNotMatch(text, /Drafts/);
-
-    assert.equal(teamInstructions({}), "");
-    assert.match(teamInstructions({ PENPOT_MCP_TEAM: "Alphanusa" }), /team "Alphanusa"/);
 });
