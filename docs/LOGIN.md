@@ -73,6 +73,18 @@ Isi App ID dan App secret aplikasi itu ke variabel di bawah.
       PENPOT_MCP_OIDC_ROLES: ${PENPOT_OIDC_ROLES:-}
       PENPOT_MCP_OIDC_ROLES_ATTR: ${PENPOT_OIDC_ROLES_ATTR:-roles}
       PENPOT_MCP_SECRET_KEY: ${PENPOT_MCP_SECRET_KEY:?set PENPOT_MCP_SECRET_KEY}
+    depends_on:
+      penpot-mcp-init:
+        condition: service_completed_successfully
+
+  # Server MCP berjalan sebagai user node (uid 1000). Service ini memastikan volume
+  # datanya milik user itu; tanpa ini server bisa menolak start ("not writable").
+  penpot-mcp-init:
+    image: alpine:3.20
+    command: chown -R 1000:1000 /data
+    volumes:
+      - penpot_mcp_data:/data
+    restart: "no"
 ```
 
 Lalu tambahkan `penpot_mcp_data:` di bagian `volumes:` paling bawah.

@@ -93,6 +93,18 @@ test("the vault is encrypted and refuses a different key", async () => {
     }
 });
 
+test("a read-only data directory is reported at startup", { skip: process.getuid?.() === 0 }, async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "vault-"));
+    const fs = await import("node:fs");
+    try {
+        fs.chmodSync(dir, 0o500);
+        await assert.rejects(new Vault(dir, SECRET).load(), /not writable/);
+    } finally {
+        fs.chmodSync(dir, 0o700);
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test("one failed vault write does not block the following ones", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "vault-"));
     const fs = await import("node:fs");
