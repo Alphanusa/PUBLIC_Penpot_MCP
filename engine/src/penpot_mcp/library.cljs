@@ -115,6 +115,24 @@
        :else
        (first picked)))))
 
+(defn asset-by-name
+  "The color or typography (`kind`: :colors, :typographies) of file `data`'s
+  own library named `full` (case and slash spacing ignored), or nil."
+  [data kind full]
+  (let [k (name-key full)]
+    (d/seek #(and (not (:deleted %)) (= k (name-key (full-name %))))
+            (vals (get data kind)))))
+
+(defn asset-names
+  "Asset id -> {:name full-name :file file-id :file-name name} for the colors
+  and typographies of an `index`, to name the library refs of shapes."
+  [index]
+  (into {}
+        (map (fn [asset] [(:id asset) {:name (full-name asset)
+                                       :file (::file-id asset)
+                                       :file-name (::file-name asset)}]))
+        (concat (:colors index) (:typographies index))))
+
 (defn library-data
   "Data of the file that owns `asset`, from `libraries` (id -> file)."
   [libraries asset]

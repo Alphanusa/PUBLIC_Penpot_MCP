@@ -38,3 +38,21 @@
   \"ibm-plex-sans\" and \"IBMPlexSans\" compare equal."
   [s]
   (-> (str s) str/lower (str/replace #"[\s_\-]+" "")))
+
+(defn map-acc
+  "Maps `f` ([acc x] -> [acc x']) over `xs` into a vector, threading `acc`.
+  Returns [acc xs']."
+  [f acc xs]
+  (reduce (fn [[acc out] x] (let [[acc x'] (f acc x)] [acc (conj out x')]))
+          [acc []]
+          xs))
+
+(defn walk-content
+  "Applies `f` ([acc node] -> [acc node']) to every node of a text content
+  tree, parents first, threading `acc`. Returns [acc content']."
+  [f acc node]
+  (let [[acc node] (f acc node)]
+    (if (seq (:children node))
+      (let [[acc children] (map-acc #(walk-content f %1 %2) acc (:children node))]
+        [acc (assoc node :children children)])
+      [acc node])))
