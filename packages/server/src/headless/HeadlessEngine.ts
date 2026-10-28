@@ -21,6 +21,8 @@ export interface PenpotEngineModule {
             objectId: string;
             scale?: number;
             format?: "png" | "jpeg" | "webp" | "svg" | "pdf";
+            /** token theme(s) to preview, e.g. "Mode/Dark": applied to the render only */
+            theme?: string | string[];
         }
     ): Promise<Uint8Array>;
     pageSummary(
@@ -78,9 +80,41 @@ export interface PenpotEngineModule {
         }
     ): Promise<any>;
     getTokens(
-        opts: PenpotContext & { fileId: string; set?: string; type?: string; search?: string; limit?: number }
+        opts: PenpotContext & {
+            fileId: string;
+            set?: string;
+            type?: string;
+            search?: string;
+            limit?: number;
+            format?: "list" | "dtcg";
+        }
     ): Promise<any>;
     editTokens(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
+    auditDesign(
+        opts: PenpotContext & { fileId: string; pageId?: string; checks?: string[]; limit?: number }
+    ): Promise<any>;
+    fileVersions(
+        opts: PenpotContext & {
+            fileId: string;
+            action: "list" | "create" | "rename" | "delete" | "restore" | "lock" | "unlock";
+            id?: string;
+            label?: string;
+        }
+    ): Promise<any>;
+    comments(
+        opts: PenpotContext & {
+            fileId: string;
+            action: "list" | "create" | "reply" | "resolve" | "reopen" | "delete";
+            pageId?: string;
+            shapeId?: string;
+            x?: number;
+            y?: number;
+            content?: string;
+            threadId?: string;
+            includeResolved?: boolean;
+            limit?: number;
+        }
+    ): Promise<any>;
 }
 
 /**

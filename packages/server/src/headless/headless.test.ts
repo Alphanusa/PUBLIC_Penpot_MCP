@@ -62,17 +62,35 @@ export async function moveShapes(opts) {
 }
 export async function getTokens(opts) { calls.push(["getTokens", opts]); return { themes: [], sets: [{ name: "core" }], tokens: [], totalTokens: 0 }; }
 export async function editTokens(opts) { calls.push(["editTokens", opts]); return { changes: opts.ops.length, saved: !opts.dryRun }; }
+export async function auditDesign(opts) {
+  calls.push(["auditDesign", opts]);
+  return { score: 82, summary: { contrast: 1 }, issues: [{ category: "contrast", severity: "error", message: "low" }] };
+}
+export async function fileVersions(opts) {
+  calls.push(["fileVersions", opts]);
+  return { action: opts.action, versions: [{ id: "v1", label: "Before redesign" }] };
+}
+export async function comments(opts) {
+  calls.push(["comments", opts]);
+  return { action: opts.action, threads: [{ id: "c1", comments: [{ content: "Make it bigger" }] }], total: 1 };
+}
 export async function uploadImage(opts) {
   calls.push(["uploadImage", opts]);
   return { id: "44444444-4444-4444-4444-444444444444", name: opts.name, width: 118, height: 32, mtype: opts.mimeType ?? "image/png" };
 }
 export async function pageSummary(opts) {
   calls.push(["pageSummary", opts]);
+  if (opts.rootId) {
+    return { pageId: "11111111-1111-1111-1111-111111111111", pageName: "Page 1",
+             tree: { id: opts.rootId, name: "Icon / Check", type: "frame",
+                     exports: [{ type: "svg", scale: 1 }, { type: "png", scale: 2, suffix: "@2x" }] } };
+  }
   return { pageId: "11111111-1111-1111-1111-111111111111", pageName: "Page 1",
            tree: { id: "root", type: "root", children: [{ id: "22222222-2222-2222-2222-222222222222", type: "frame" }] } };
 }
 export async function renderShape(opts) {
   await track("renderShape", opts);
+  if (opts.format === "svg") return new TextEncoder().encode("<svg/>");
   return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 }
 export async function applyOps(opts) {
@@ -123,6 +141,11 @@ test("registers the browser-free tools", () => {
         "move_shapes",
         "get_tokens",
         "edit_tokens",
+        "audit_design",
+        "export_assets",
+        "file_versions",
+        "comments",
+        "design_guide",
     ]);
 });
 
@@ -532,8 +555,11 @@ test("get_tokens and edit_tokens pass their arguments", async () => {
         type: "color",
         search: "brand",
         limit: 200,
+        format: "list",
     });
     assert.equal(JSON.parse(res.content[0].text).sets[0].name, "core");
+    await byName(tools, "get_tokens").execute({ fileId: "f1", format: "dtcg" });
+    assert.equal(fake().calls.filter((c) => c[0] === "getTokens")[1][1].format, "dtcg");
     const ops = [
         { op: "addSet", name: "core", active: true },
         { op: "addToken", set: "core", type: "color", name: "color.primary", value: "#0066ff" },
@@ -546,4 +572,79 @@ test("create_file can publish the new file as a shared library", async () => {
     const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
     await byName(tools, "create_file").execute({ projectId: "p1", name: "Design system", shared: true });
     assert.equal(fake().calls.find((c) => c[0] === "createFile")[1].shared, true);
+});
+
+test("audit_design, file_versions and comments pass their arguments", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    const audit = await byName(tools, "audit_design").execute({ fileId: "f1", checks: ["contrast", "colors"] });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "auditDesign")[1], {
+        ...ctx,
+        fileId: "f1",
+        pageId: undefined,
+        checks: ["contrast", "colors"],
+        limit: 60,
+    });
+    assert.equal(JSON.parse(audit.content[0].text).score, 82);
+
+    const versions = await byName(tools, "file_versions").execute({
+        fileId: "f1",
+        action: "create",
+        label: "Before redesign",
+    });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "fileVersions")[1], {
+        ...ctx,
+        fileId: "f1",
+        action: "create",
+        id: undefined,
+        label: "Before redesign",
+    });
+    assert.equal(JSON.parse(versions.content[0].text).versions[0].label, "Before redesign");
+
+    const threads = await byName(tools, "comments").execute({
+        fileId: "f1",
+        action: "create",
+        shapeId: "22222222-2222-2222-2222-222222222222",
+        content: "Uses the Primary variant on purpose",
+    });
+    const call = fake().calls.find((c) => c[0] === "comments")[1];
+    assert.equal(call.action, "create");
+    assert.equal(call.shapeId, "22222222-2222-2222-2222-222222222222");
+    assert.equal(call.includeResolved, false);
+    assert.equal(JSON.parse(threads.content[0].text).threads[0].comments[0].content, "Make it bigger");
+});
+
+test("export_assets renders the shape's export settings", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const res = await byName(tools, "export_assets").execute({
+        fileId: "f1",
+        shapeId: "33333333-3333-3333-3333-333333333333",
+    });
+    const renders = fake()
+        .calls.filter((c) => c[0] === "renderShape")
+        .map((c) => [c[1].format, c[1].scale]);
+    assert.deepEqual(renders, [
+        ["svg", 1],
+        ["png", 2],
+    ]);
+    assert.match(res.content[0].text, /^Icon - Check\.svg:\n<svg\/>/);
+    assert.equal(res.content[1].text, "Icon - Check@2x.png");
+    assert.equal(res.content[2].type, "image");
+    assert.equal(res.content[2].mimeType, "image/png");
+    // no directory option without file system access
+    assert.equal("directory" in byName(tools, "export_assets").getInputSchema(), false);
+});
+
+test("render_shape previews a token theme", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    await byName(tools, "render_shape").execute({ fileId: "f1", pageId: "p", shapeId: "s", theme: "Mode/Dark" });
+    assert.equal(fake().calls.find((c) => c[0] === "renderShape")[1].theme, "Mode/Dark");
+});
+
+test("design_guide explains the workflow and each area", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const guide = byName(tools, "design_guide");
+    assert.match((await guide.execute({})).content[0].text, /Building a design system/);
+    assert.match((await guide.execute({ topic: "components" })).content[0].text, /makeVariants/);
+    assert.match((await guide.execute({ topic: "layout" })).content[0].text, /"type": "grid"/);
 });

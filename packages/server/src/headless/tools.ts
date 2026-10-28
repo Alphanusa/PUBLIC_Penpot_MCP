@@ -1,8 +1,9 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename, extname, isAbsolute } from "node:path";
+import { basename, extname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { Tool } from "../Tool";
-import { PNGResponse, TextResponse, ToolResponse } from "../ToolResponse";
+import { ImageContent, PNGResponse, TextContent, TextResponse, ToolResponse } from "../ToolResponse";
+import { FileUtils } from "../utils/FileUtils";
 import type { PenpotMcpServer } from "../PenpotMcpServer";
 import { engineFunction, HeadlessEngine } from "./HeadlessEngine";
 import { FONT_WEIGHTS, readFontInfo } from "./fontInfo";
@@ -190,12 +191,20 @@ export class RenderShapeArgs {
             .describe("Shape (usually a board) to render. Optional: defaults to the first board of the page."),
         scale: z.number().min(0.1).max(4).default(1).describe("Scale factor; keep at 1 or below for large boards."),
         format: z.enum(["png", "svg"]).default("png").describe("png (default, returned as an image) or svg (markup)."),
+        theme: z
+            .union([z.string(), z.array(z.string()).min(1).max(10)])
+            .optional()
+            .describe(
+                'Design token theme(s) to preview, e.g. "Mode/Dark" (see get_tokens): shapes using tokens show that ' +
+                    "theme's values in this render only; the file is not changed."
+            ),
     };
     fileId!: string;
     pageId?: string;
     shapeId?: string;
     scale: number = 1;
     format: "png" | "svg" = "png";
+    theme?: string | string[];
 }
 
 export class RenderShapeTool extends HeadlessTool<RenderShapeArgs> {
@@ -237,6 +246,7 @@ export class RenderShapeTool extends HeadlessTool<RenderShapeArgs> {
                 objectId: shapeId!,
                 scale: args.scale ?? 1,
                 format,
+                ...(args.theme ? { theme: args.theme } : {}),
             })
         );
         return format === "svg" ? new TextResponse(Buffer.from(bytes).toString("utf8")) : new PNGResponse(bytes);
@@ -245,60 +255,68 @@ export class RenderShapeTool extends HeadlessTool<RenderShapeArgs> {
 
 // ------------------------------------------------------------------ edit_page
 
-const OPS_DESCRIPTION = `Operations applied in order, as one atomic save. Each is an object with "op":
+const OPS_DESCRIPTION = `Operations applied in order, as one atomic save. Each is an object with "op".
+design_guide explains each area in detail, with examples (topics: components, vectors, effects, text, layout,
+tokens, prototypes, workflow).
 
-create — {"op":"create","type":"frame"|"rect"|"ellipse"|"text"|"image"|"component","ref":"myCard","parent":<id or ref>, ...props}
-  - parent: a board (frame) or group id, or the ref of a shape created earlier in this batch; omit for the page root.
-  - x, y are relative to the parent; width, height in px. Inside a flex layout, x/y are computed by the layout.
-  - "image": a rectangle filled with an uploaded image: {"op":"create","type":"image","image":<media id>,"fit"?}
-    sized to the image's natural size, or to width/height (give one of them to keep the aspect ratio).
-  - "component": a copy of a component of the file or of a linked library (see get_library), linked to it like
-    one dragged from the assets panel: {"op":"create","type":"component","component":"Buttons / Primary",
-    "variant"?:{"Size":"L"}, "texts"?:{"<text layer name>":"Save"}, "parent", "x", "y", "width", "height", "sizing",
-    "name", "visible", "opacity"}. "texts" and the other props are overrides of the copy; change other layers of
-    the copy with update ops on their ids (see get_page_overview).
-update — {"op":"update","id":<id or ref>, ...props}  (only the given props change; x/y/width/height move/resize)
-delete — {"op":"delete","id":<id or ref>}  (children are deleted too)
-move — {"op":"move","id":<id or ref>,"parent"?:<board/group id or ref, or null for the page root>,"index"?:0,"x"?,"y"?}
-  re-parents and/or reorders a shape, like dragging it in the layers panel. index counts like the layers panel:
-  0 = top layer = first item of a flex layout; without it, the shape goes to the end of a flex layout or on top of
-  its new siblings. Outside a layout it keeps its place on the page unless x/y (relative to the new parent) are given.
-  To move boards to another page or file use move_shapes.
-makeComponent — {"op":"makeComponent","id":<board id or ref>,"name"?:"Buttons / Primary"}  turns a board into a main
-  component of this file's library (use the file as a library: share it with create_file shared, or link it).
-linkAssets — {"op":"linkAssets","scope"?:<board id or ref>|"page","colors"?:true,"typographies"?:false,
-  "prefer"?:{"#ffffff":"Surface"}}  links raw colors already used (fills, strokes, text colors; hex + opacity) and,
-  with typographies, text styles (font, weight, size, line height, letter spacing, case) to the library assets of
-  the file or its linked libraries with exactly that value, as if picked from the assets panel; values don't change.
-  A value several assets have is ambiguous: it is skipped unless "prefer" names the asset for that hex. The result
-  (linkAssets) lists per asset how many shapes were linked, plus the ambiguous and unmatched values with their
-  shape counts: add the missing colors with edit_library, or fix stray values, then run it again. Shapes inside
-  component copies follow their main and are left alone.
+create — {"op":"create","type":<type>,"ref":"myCard","parent":<board/group id or ref>, ...props}
+  type: "frame" (board), "rect", "ellipse", "text", "image" ({"image":<media id>,"fit"?}), "svg" ({"svg":"<svg…>",
+  "color"?} imported as editable vectors), "path" ({"d":"M0 0 L24 12 L0 24 Z"}), or "component" (a copy:
+  {"component":"Buttons / Button","variant"?:{"Type":"Primary"},"texts"?:{"Label":"Save"}}).
+  parent: omit for the page root. x, y are relative to the parent; inside a flex/grid layout the layout places it.
+update — {"op":"update","id":<id or ref>, ...props}   (only the given props change)
+delete — {"op":"delete","id"}   move — {"op":"move","id","parent"?:<id|null>,"index"?:0,"x"?,"y"?} (layers-panel order;
+  0 = top = first in a layout; move_shapes moves boards to another page or file)
+group — {"op":"group","ids":[…],"name"?,"ref"?}   ungroup — {"op":"ungroup","id"} (a group, boolean or board)
+boolean — {"op":"boolean","ids":[…],"kind":"union|difference|intersection|exclude","name"?,"ref"?}
+makeComponent — {"op":"makeComponent","id":<board>,"name"?:"Buttons / Primary","annotation"?:"usage notes"}
+makeVariants — {"op":"makeVariants","name":"Buttons / Button","ref"?,"layout"?:{…}|false,
+  "variants":[{"id":<board or main>,"properties":{"Type":"Primary","Size":"M"}}, …]}  (or "container":<set board> to
+  add variants to an existing set) — combines boards/components into a variant set, like the editor.
+setVariant — {"op":"setVariant","id":<variant main>,"properties":{"State":"Hover"}} (new names are added to every
+  variant), or on any variant or the set board: "rename":{"Old":"New"}, "remove":["Prop"].
+swap — {"op":"swap","id":<copy>,"component"?:"Icons / Close","variant"?:{"Type":"Secondary"},"keepOverrides"?:true}
+  (variant alone switches to the nearest variant with those values, keeping text and other overrides)
+detach — {"op":"detach","id":<copy>}   resetOverrides — {"op":"resetOverrides","id":<copy>}
+annotate — {"op":"annotate","id":<main>,"annotation":"…"|null}
+linkAssets — {"op":"linkAssets","scope"?:<board>|"page","colors"?:true,"typographies"?:false,"prefer"?:{"#fff":"Surface"}}
+  links raw colors/text styles to library assets with exactly that value (reports ambiguous and unmatched values).
+flow — {"op":"flow","name":"Onboarding","start":<top-level board>}   deleteFlow — {"op":"deleteFlow","name"}
+Editing a main component updates its copies on every page of the file (copiesUpdated in the result).
 
-Props:
-  Colors ("fill", "stroke", "textColor") are "#rrggbb" or the name of a library color ("Brand / Primary"), which
-  keeps the shape linked to it.
-  name; fill: a color, "none", or an image {"image": <media id from upload_image>, "fit": "cover"|"contain"|"fill",
-    "opacity"?} (cover: fills the shape, cropped — Penpot's default; contain: whole image, centered; fill: stretched);
-  fillOpacity (0-1, with fill); stroke ({"color","width","align":"inner|center|outer","opacity"} or "none");
-  radius (rect/board: number or [tl,tr,br,bl]); opacity (0-1); visible (bool); clip (boards: clip content);
-  layout (boards): {"type":"flex","direction":"row|column","gap","rowGap","columnGap",
-    "padding": n | [vertical,horizontal] | [top,right,bottom,left],
-    "alignItems":"start|center|end|stretch","justifyContent":"start|center|end|space-between|space-around|space-evenly",
-    "wrap":bool} or false to remove;
-  sizing (children of flex boards, or boards hugging content): {"h":"fix|fill|hug","v":"fix|fill|hug"};
-  text props: text (use \\n for new paragraphs), typography (a library typography, e.g. "Heading / H1": sets the
-    font, size, line height, letter spacing and text transform, linked), fontFamily (a team font, the builtin "Source Sans Pro" or any
-    Google font, e.g. "IBM Plex Sans"; see list_fonts), fontWeight (100-900 or "bold"; must exist for the family),
-    fontStyle ("normal"|"italic"), fontSize, textColor (or fill), textAlign (left|center|right|justify),
-    lineHeight (multiplier, e.g. 1.4), letterSpacing, textTransform (none|uppercase|lowercase|capitalize),
-    growType ("auto-width" default, "auto-height" when width is given: wraps at that width, "fixed").
-  tokens (design tokens, see get_tokens): {"fill"|"stroke"|"textColor": <color token>, "radius", "opacity", "width",
-    "height", "gap", "rowGap", "columnGap", "padding", "fontSize", "fontFamily", "fontWeight", "letterSpacing":
-    <token name>} sets the value the token resolves to and keeps the shape linked to the token, like applying it
-    from the Tokens panel (gap/padding need a flex layout). Setting a prop by hand later unlinks its token.
+Props (create and update):
+  name; x; y; width; height; rotation (degrees); opacity (0-1); visible; clip (boards); radius (number or
+  [tl,tr,br,bl]);
+  fill: "#rrggbb" | library color name | "none" | {"color","opacity"} | {"gradient":{"type":"linear|radial",
+    "angle":90,"stops":["#3366ff","#00aa88"]}} | {"image":<media id>,"fit":"cover|contain|fill"} | a list of
+    those (first on top); fillOpacity;
+  stroke: "#rrggbb" or {"color"|"gradient","width","align":"inner|center|outer","style":"solid|dashed|dotted",
+    "opacity"} or "none";
+  shadow: {"style":"drop|inner","x","y","blur","spread","color","opacity"} or a list, or "none";
+  blur (layer blur px, 0 removes); backgroundBlur; blendMode ("multiply", "screen", "overlay", …);
+  layout (boards): {"type":"flex","direction":"row|column","gap","rowGap","columnGap","padding":n|[v,h]|[t,r,b,l],
+    "alignItems","justifyContent","alignContent","wrap"} or {"type":"grid","columns":["1fr","1fr",240],
+    "rows":[64,"auto"],"gap","padding","alignItems","justifyItems","direction"} or false;
+  children of layouts: sizing {"h":"fix|fill|hug","v":…}, margin, minWidth, maxWidth, minHeight, maxHeight,
+    alignSelf, absolute (out of the flow), zIndex; grid children: cell {"row","column","rowSpan","columnSpan",
+    "alignSelf","justifySelf"} (from 1);
+  constraints (outside layouts): {"h":"left|right|leftright|center|scale","v":"top|bottom|topbottom|center|scale"};
+  text: text (\\n = new paragraph) or spans [{"text","fontWeight","textColor","textDecoration",…}], typography (a
+    library typography), fontFamily, fontWeight, fontStyle, fontSize, textColor, textAlign, verticalAlign
+    (top|center|bottom), lineHeight, letterSpacing, textTransform, textDecoration (underline|line-through),
+    growType (auto-width|auto-height|fixed);
+  color (svg/group/path/boolean: paints every fill and stroke, e.g. icons); d (paths);
+  tokens: {"fill","stroke","textColor","radius","opacity","width","height","gap","rowGap","columnGap","padding",
+    "margin","minWidth","maxWidth","minHeight","maxHeight","strokeWidth","rotation","shadow","typography",
+    "fontSize","fontFamily","fontWeight","lineHeight","letterSpacing","textCase","textDecoration": <token name>}
+    applies design tokens like the Tokens panel (see get_tokens); a prop set by hand later unlinks its token;
+  interactions (prototype): [{"trigger":"click|hover|mouse-enter|mouse-leave|press|after-delay","action":
+    "navigate|open-overlay|toggle-overlay|close-overlay|back|open-url","destination":<board>,"delay","url",
+    "overlay":{"position":"center|top-left|…|bottom-center","closeOnClickOutside","background"},
+    "animation":{"type":"dissolve|slide|push","direction","duration","easing"}}] or "none";
+  exports: [{"type":"png|jpeg|webp|svg|pdf","scale":2,"suffix":"@2x"}] (export settings, see export_assets).
 Unknown or misplaced properties are rejected with an error naming them (dryRun too), never ignored.
-Text size, flex positions and hug sizes are computed automatically, as in the Penpot editor.`;
+Text size, layout positions and hug sizes are computed automatically, as in the Penpot editor.`;
 
 export class EditPageArgs {
     static schema = {
@@ -327,13 +345,14 @@ export class EditPageTool extends HeadlessTool<EditPageArgs> {
 
     public getToolDescription(): string {
         return (
-            "Creates, updates, moves (re-parents / reorders) and deletes shapes on a Penpot page: boards, rectangles, " +
-            "ellipses, texts, images and copies of library components, with fills (colors, library colors or uploaded " +
-            "images), strokes, radius, fonts and library typographies, flex layout and sizing; turns boards into " +
-            "components; links raw colors and text styles to library assets (linkAssets). All operations " +
-            "are saved together, and people who have the file open see the changes live. Returns the ids of created " +
+            "Creates, updates, moves and deletes shapes on a Penpot page: boards, rectangles, ellipses, texts, " +
+            "images, SVG vectors, paths, groups, boolean shapes and copies of components; fills (colors, gradients, " +
+            "images, library colors), strokes, shadows, blur, rich text, flex and grid layouts, constraints, design " +
+            "tokens, prototype interactions and export settings. Builds components and variant sets, swaps and " +
+            "detaches copies (copies follow their main), links raw values to library assets. All operations are " +
+            "saved together, and people who have the file open see the changes live. Returns the ids of created " +
             "shapes (by ref) and their computed geometry. Check the result with render_shape when the visual outcome " +
-            `matters. ${BROWSER_FREE}`
+            `matters, and audit_design when building a design system. ${BROWSER_FREE}`
         );
     }
 
@@ -1161,12 +1180,21 @@ export class GetTokensArgs {
             .max(2000)
             .default(200)
             .describe("Maximum tokens listed (themes and sets are all listed)."),
+        format: z
+            .enum(["list", "dtcg"])
+            .default("list")
+            .describe(
+                "list (default): themes, sets and tokens with resolved values; dtcg: every set, theme and token as " +
+                    "W3C design tokens (DTCG) JSON, like the Tokens panel's export (for code, Style Dictionary, or " +
+                    "edit_tokens import in another file)."
+            ),
     };
     fileId!: string;
     set?: string;
     type?: string;
     search?: string;
     limit: number = 200;
+    format: "list" | "dtcg" = "list";
 }
 
 export class GetTokensTool extends HeadlessTool<GetTokensArgs> {
@@ -1200,6 +1228,7 @@ export class GetTokensTool extends HeadlessTool<GetTokensArgs> {
                 type: args.type,
                 search: args.search,
                 limit: args.limit ?? 200,
+                format: args.format ?? "list",
             })
         );
         return new TextResponse(JSON.stringify(result));
@@ -1218,6 +1247,9 @@ const TOKEN_OPS_DESCRIPTION = `Token operations applied in order, saved together
   {"op":"addToken","set":<name or id>,"type":"color","name":"color.primary","value":"#0066ff","description"?}
   {"op":"updateToken","set","token":<name or id>,"name"?,"value"?,"description"?}   (the type can't change)
   {"op":"deleteToken","set","token"}
+  {"op":"import","tokens":<DTCG JSON object or text>,"mode"?:"merge"|"replace","setName"?:"core"}  imports W3C design
+    tokens (DTCG) or Tokens Studio JSON like the panel: several sets with $themes/$metadata, or one set (named
+    setName). merge (default) adds and updates by name; replace makes the import the file's tokens.
 Types: color, dimensions, spacing, sizing, border-radius, stroke-width, opacity (0-1), rotation, number, font-family
   (["Inter", "sans-serif"] or "Inter, sans-serif"), font-size, font-weight, letter-spacing, text-case,
   text-decoration, typography ({"fontFamily","fontSize","fontWeight","lineHeight","letterSpacing",...}),
@@ -1274,6 +1306,430 @@ export class EditTokensTool extends HeadlessTool<EditTokensArgs> {
     }
 }
 
+// --------------------------------------------------------------- audit_design
+
+export class AuditDesignArgs {
+    static schema = {
+        fileId: FILE_ID,
+        pageId: PAGE_ID.describe("Only this page. Optional: all pages of the file."),
+        checks: z
+            .array(
+                z.enum(["colors", "typography", "spacing", "radius", "contrast", "components", "naming", "structure"])
+            )
+            .min(1)
+            .optional()
+            .describe("Only these checks. Optional: all of them."),
+        limit: z.number().int().min(1).max(300).default(60).describe("Maximum issues listed (worst first)."),
+    };
+    fileId!: string;
+    pageId?: string;
+    checks?: string[];
+    limit: number = 60;
+}
+
+export class AuditDesignTool extends HeadlessTool<AuditDesignArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, AuditDesignArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "audit_design";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Checks a design against its design system and reports what to fix, worst first: colors and text styles " +
+            "used raw instead of library assets or tokens (with the asset to link), spacing and radius off the token " +
+            "scale, text contrast below WCAG AA, repeated layer structures that should be components, variants with " +
+            "empty properties, default layer names, layers outside boards, rows and columns placed by hand. Each " +
+            "issue names a few of the shapes and how to fix it; the report also gives a score, the palette in use and " +
+            "how much is linked to assets or tokens. Run it after building or changing screens and fix with edit_page " +
+            `(e.g. linkAssets). ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: AuditDesignArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.backend((engine) =>
+            engineFunction(
+                engine,
+                "auditDesign"
+            )({ ...ctx, fileId: args.fileId, pageId: args.pageId, checks: args.checks, limit: args.limit ?? 60 })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
+// -------------------------------------------------------------- file_versions
+
+export class FileVersionsArgs {
+    static schema = {
+        fileId: FILE_ID,
+        action: z
+            .enum(["list", "create", "rename", "delete", "restore", "lock", "unlock"])
+            .default("list")
+            .describe(
+                "list the versions; create one (a named checkpoint, e.g. before a big change); rename; delete; " +
+                    "restore one (the file goes back to it — Penpot first saves the current state as a version); " +
+                    "lock/unlock (a locked version can't be deleted by others)."
+            ),
+        id: penpotId().optional().describe("Version id (from list), for rename, delete, restore, lock and unlock."),
+        label: z.string().trim().min(1).max(250).optional().describe("Version name, for create and rename."),
+    };
+    fileId!: string;
+    action: "list" | "create" | "rename" | "delete" | "restore" | "lock" | "unlock" = "list";
+    id?: string;
+    label?: string;
+}
+
+export class FileVersionsTool extends HeadlessTool<FileVersionsArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, FileVersionsArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "file_versions";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Manages the versions of a file, as in Penpot's History panel: list them, save the current state as a " +
+            "named version (do this before large or risky edits), rename, delete, lock, or restore a version. " +
+            `Restoring replaces the file's content: confirm with the user first. ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: FileVersionsArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.backend((engine) =>
+            engineFunction(
+                engine,
+                "fileVersions"
+            )({ ...ctx, fileId: args.fileId, action: args.action ?? "list", id: args.id, label: args.label })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
+// ------------------------------------------------------------------- comments
+
+export class CommentsArgs {
+    static schema = {
+        fileId: FILE_ID,
+        action: z
+            .enum(["list", "create", "reply", "resolve", "reopen", "delete"])
+            .default("list")
+            .describe("list threads (with their comments); create a thread; reply; resolve; reopen; delete a thread."),
+        pageId: PAGE_ID.describe("Page of a new thread, or the page to list. Optional: the first page / all pages."),
+        shapeId: penpotId().optional().describe("For create: pin the comment next to this shape (its board)."),
+        x: z.number().optional().describe("For create without shapeId: position on the page."),
+        y: z.number().optional(),
+        content: z.string().trim().min(1).max(2000).optional().describe("Comment text, for create and reply."),
+        threadId: penpotId().optional().describe("Thread id (from list), for reply, resolve, reopen and delete."),
+        includeResolved: z.boolean().default(false).describe("list: include resolved threads."),
+        limit: z.number().int().min(1).max(100).default(30).describe("list: maximum threads."),
+    };
+    fileId!: string;
+    action: "list" | "create" | "reply" | "resolve" | "reopen" | "delete" = "list";
+    pageId?: string;
+    shapeId?: string;
+    x?: number;
+    y?: number;
+    content?: string;
+    threadId?: string;
+    includeResolved: boolean = false;
+    limit: number = 30;
+}
+
+export class CommentsTool extends HeadlessTool<CommentsArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, CommentsArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "comments";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Reads and writes the comments of a Penpot file: lists open threads with their comments (feedback to act " +
+            "on), starts a thread pinned to a shape (e.g. to explain a design decision or ask for review), replies, " +
+            `resolves, reopens and deletes threads. ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: CommentsArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.backend((engine) =>
+            engineFunction(
+                engine,
+                "comments"
+            )({
+                ...ctx,
+                fileId: args.fileId,
+                action: args.action ?? "list",
+                pageId: args.pageId,
+                shapeId: args.shapeId,
+                x: args.x,
+                y: args.y,
+                content: args.content,
+                threadId: args.threadId,
+                includeResolved: args.includeResolved ?? false,
+                limit: args.limit ?? 30,
+            })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
+// -------------------------------------------------------------- export_assets
+
+const EXPORT_TYPES = ["png", "jpeg", "webp", "svg", "pdf"] as const;
+type ExportType = (typeof EXPORT_TYPES)[number];
+const MIME: Record<ExportType, string> = {
+    png: "image/png",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    pdf: "application/pdf",
+};
+
+export class ExportAssetsArgs {
+    static schema = {
+        fileId: FILE_ID,
+        pageId: PAGE_ID,
+        shapeId: penpotId().describe("Shape to export: a board, a component's main, an icon…"),
+        exports: z
+            .array(
+                z.object({
+                    type: z.enum(EXPORT_TYPES),
+                    scale: z.number().min(0.1).max(8).default(1),
+                    suffix: z.string().max(40).default(""),
+                })
+            )
+            .min(1)
+            .max(10)
+            .optional()
+            .describe(
+                'Formats, e.g. [{"type":"png","scale":2,"suffix":"@2x"},{"type":"svg"}]. Optional: the shape\'s ' +
+                    "export settings (the exports prop of edit_page), else PNG at 1x."
+            ),
+        directory: z
+            .string()
+            .optional()
+            .describe("Absolute directory to write the files to (named after the shape plus the suffix)."),
+    };
+    fileId!: string;
+    pageId?: string;
+    shapeId!: string;
+    exports?: { type: ExportType; scale: number; suffix: string }[];
+    directory?: string;
+}
+
+export class ExportAssetsTool extends HeadlessTool<ExportAssetsArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        let schema: any = ExportAssetsArgs.schema;
+        if (!mcpServer.isFileSystemAccessEnabled?.()) {
+            schema = { ...schema };
+            delete schema.directory;
+        }
+        super(mcpServer, schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "export_assets";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Exports a shape as PNG, JPEG, WebP, SVG or PDF at any scale, like the Export section of the design tab, " +
+            "using the shape's export settings when no formats are given — e.g. icons as SVG and @2x PNG for " +
+            "developers. Images are returned inline" +
+            (this.mcpServer.isFileSystemAccessEnabled?.() ? " or written to a directory" : "") +
+            `. ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: ExportAssetsArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const summary = await this.engine.backend((engine) =>
+            engine.pageSummary({ ...ctx, fileId: args.fileId, pageId: args.pageId, rootId: args.shapeId, depth: 1 })
+        );
+        const pageId = args.pageId ?? summary.pageId;
+        const name = String(summary.tree?.name ?? "export").replace(/[\\/:*?"<>|]+/g, "-");
+        const exports = args.exports ?? summary.tree?.exports ?? [{ type: "png", scale: 1, suffix: "" }];
+        if (args.directory) FileUtils.checkPathIsAbsolute(args.directory);
+        const content: any[] = [];
+        const written: string[] = [];
+        for (const e of exports) {
+            const type = (e.type ?? "png") as ExportType;
+            const scale = e.scale ?? 1;
+            const bytes = await this.engine.wasm((engine) =>
+                engine.renderShape({ ...ctx, fileId: args.fileId, pageId, objectId: args.shapeId, scale, format: type })
+            );
+            const fileName = `${name}${e.suffix ?? ""}.${type === "jpeg" ? "jpg" : type}`;
+            if (args.directory) {
+                const path = join(args.directory, fileName);
+                FileUtils.writeBinaryFile(path, bytes);
+                written.push(path);
+            } else if (type === "svg") {
+                content.push(new TextContent(`${fileName}:\n${Buffer.from(bytes).toString("utf8")}`));
+            } else if (type === "pdf") {
+                content.push(new TextContent(fileName));
+                content.push({
+                    type: "resource",
+                    resource: {
+                        uri: `penpot://export/${encodeURIComponent(fileName)}`,
+                        mimeType: MIME.pdf,
+                        blob: Buffer.from(bytes).toString("base64"),
+                    },
+                });
+            } else {
+                content.push(new TextContent(fileName));
+                content.push(new ImageContent(Buffer.from(bytes).toString("base64"), MIME[type]));
+            }
+        }
+        if (args.directory) return new TextResponse(`Exported:\n${written.join("\n")}`);
+        return new ToolResponse(content);
+    }
+}
+
+// ---------------------------------------------------------------- design_guide
+
+const GUIDES: Record<string, string> = {
+    workflow: `Building a design system with these tools
+1. Tokens first (edit_tokens): sets "core" (raw values: color.blue.500, space.4, radius.md, font sizes) and
+   semantic sets ("light"/"dark": color.bg, color.text, color.primary = "{color.blue.500}"), themes Mode/Light and
+   Mode/Dark. Or import existing DTCG JSON (edit_tokens import).
+2. Library assets (edit_library): colors and typographies for the styles that must be linkable from the assets
+   panel. Fonts: list_fonts / upload_font.
+3. A "Components" page (create_file with pages, or edit_pages): build each component as a board with a flex or grid
+   layout, applying tokens ("tokens": {"fill": "color.primary", "padding": "space.4", "radius": "radius.md",
+   "typography": "type.label"}), then makeComponent with an annotation. Icons: create type "svg" with the icon
+   markup and "color", inside a 24px board, then makeComponent ("Icons / Check").
+4. Variants: build one board per state/size, then makeVariants {"name": "Buttons / Button", "variants": [{"id":
+   …, "properties": {"Type": "Primary", "State": "Default"}}, …]}. Add states later with makeVariants "container".
+5. Screens: copies of components (create type "component" with "variant" and "texts"), swap to switch variants,
+   layouts with sizing fill/hug so screens adapt.
+6. Check: render_shape (also with theme "Mode/Dark"), audit_design, then fix (linkAssets, tokens, contrast).
+7. Share: file_versions create before big changes; create_file shared or import_library; link_library in other
+   files; get_tokens format "dtcg" to hand tokens to developers; export_assets for icons and images; comments to
+   explain decisions.`,
+    components: `Components, variants and copies
+- makeComponent {"id": <board>, "name": "Forms / Input", "annotation": "When to use it"}: the board stays as the main.
+- makeVariants {"name": "Buttons / Button", "variants": [{"id": "primary", "properties": {"Type": "Primary",
+  "Size": "M"}}, {"id": "secondary", "properties": {"Type": "Secondary", "Size": "M"}}], "layout": {"direction":
+  "column", "gap": 24}} creates the purple variant set board (flex row by default; "layout": false keeps positions).
+  Boards that aren't components become components. Every variant must differ in at least one value.
+- makeVariants {"container": <set board>, "variants": [{"id": <new board>, "properties": {"Type": "Ghost"}}]} adds
+  variants; setVariant {"id": <variant main>, "properties": {"State": "Hover"}} sets values (a new property gets
+  "" on the other variants: set them too); setVariant {"id": <set or any variant>, "rename": {"Type": "Kind"}} or
+  {"remove": ["Size"]}.
+- Copies: {"op": "create", "type": "component", "component": "Buttons / Button", "variant": {"Type": "Primary"},
+  "texts": {"Label": "Save"}, "parent": <board>}. Change other layers of a copy with update on their ids (overrides).
+- swap {"id": <copy>, "variant": {"Type": "Secondary"}} switches variant keeping overrides; {"component":
+  "Icons / Close"} swaps a nested icon copy for another component.
+- detach turns a copy into plain layers; resetOverrides drops its overrides; annotate sets a main's note.
+- Editing a main (any of its layers) updates every copy in the file; other files get it with link_library sync.`,
+    vectors: `SVG, paths, groups and boolean shapes
+- {"op": "create", "type": "svg", "svg": "<svg viewBox='0 0 24 24' …>…</svg>", "width": 24, "height": 24,
+  "color": "#1f2937", "parent": <board>} imports the markup as editable shapes in a group (like pasting an SVG).
+  "color" paints every fill and stroke (icon tinting; a library color name keeps it linked). Embedded bitmaps
+  are skipped.
+- {"op": "create", "type": "path", "d": "M0 0 L24 12 L0 24 Z", "fill": "#e8593c"}: d is in the parent's
+  coordinates; x/y move it, width/height scale it. Without fill or stroke it gets a 1px black centered stroke.
+- update "color" on an svg group recolors it; update "d" changes a path.
+- group {"ids": [...], "name": "Logo"} / ungroup {"id"} (also removes a board, keeping its children).
+- boolean {"ids": [...], "kind": "union|difference|intersection|exclude"}: the result takes the style of the top
+  shape (the bottom one for difference). Boards and texts can't be combined.`,
+    effects: `Fills, strokes and effects
+- fill: "#3366ff", a library color name, {"gradient": {"type": "linear", "angle": 135, "stops": ["#3366ff",
+  {"color": "#00aa88", "opacity": 0.8, "offset": 1}]}} (angle like CSS: 90 = left to right, 180 = top to bottom;
+  or "start"/"end": [x, y] fractions), {"gradient": {"type": "radial", "stops": [...]}}, an image, or a list of
+  fills (first on top).
+- stroke: {"color", "width", "align": "inner|center|outer", "style": "solid|dashed|dotted", "opacity"} or
+  {"gradient": {...}, "width"}.
+- shadow: {"y": 4, "blur": 12, "color": "#0b1b3f", "opacity": 0.12} (style "drop" by default, "inner" for inner
+  shadows; spread), or a list for layered elevation; "none" removes.
+- blur: 8 (layer blur), backgroundBlur: 16 (frosted glass, with a semi-transparent fill), blendMode: "multiply".
+- Prefer tokens for repeatable values: tokens {"shadow": "elevation.2", "strokeWidth": "border.thin"}.`,
+    text: `Text
+- text: "Hello\\nWorld" (\\n = new paragraph). spans: [{"text": "Total "}, {"text": "Rp 1.250.000", "fontWeight":
+  "700"}, {"text": " /mo", "textColor": "#6b7280", "fontSize": 12}] for mixed styles; each span takes text props
+  (fontFamily, fontWeight, fontStyle, fontSize, textColor, lineHeight, letterSpacing, textTransform,
+  textDecoration, typography) over the text's own.
+- typography: a library typography name ("Heading / H1"), or tokens {"typography": "type.heading.h1"}.
+- verticalAlign: top|center|bottom (fixed-height texts); textDecoration: underline|line-through; growType:
+  auto-width, auto-height (give width), fixed.`,
+    layout: `Layout
+- Flex: layout {"type": "flex", "direction": "row|column", "gap": 8, "padding": [12, 16], "alignItems": "center",
+  "justifyContent": "space-between", "wrap": true}. Children: sizing {"h": "fill", "v": "hug"}, minWidth,
+  maxWidth, minHeight, maxHeight, margin, alignSelf, absolute (taken out of the flow, positioned with x/y),
+  zIndex.
+- Grid: layout {"type": "grid", "columns": ["1fr", "1fr", 280], "rows": [64, "auto", "1fr"], "gap": 16,
+  "padding": 24}. Tracks: number = px, "Nfr", "N%", "auto". Children fill cells in order, or go to one:
+  cell {"row": 1, "column": 1, "columnSpan": 3, "alignSelf": "center"} (rows and columns from 1; missing tracks
+  are added). Changing columns/rows places the children again in order.
+- Outside layouts: constraints {"h": "leftright", "v": "bottom"} make a shape follow its board's resizes.
+- Boards hug their content with sizing {"h": "hug", "v": "hug"} (flex/grid boards).`,
+    tokens: `Design tokens
+- get_tokens lists themes, sets and tokens with resolved values; format "dtcg" exports W3C DTCG JSON.
+- edit_tokens: addSet/addTheme/addToken…, "import" (DTCG or Tokens Studio JSON, merge or replace).
+- Apply on shapes with edit_page "tokens": {"fill", "stroke", "textColor", "radius", "opacity", "width", "height",
+  "gap", "rowGap", "columnGap", "padding", "margin", "minWidth", "maxWidth", "minHeight", "maxHeight",
+  "strokeWidth", "rotation", "shadow", "typography", "fontSize", "fontFamily", "fontWeight", "lineHeight",
+  "letterSpacing", "textCase", "textDecoration"}. Shapes follow token edits and theme switches automatically.
+- Preview a theme without switching it: render_shape {"theme": "Mode/Dark"}.
+- Values: references "{color.blue.500}", math "{space.2} * 2", rem (16px). Typography tokens are objects
+  {"fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration"}; shadow
+  tokens lists of {"offsetX", "offsetY", "blur", "spread", "color" ("#rrggbbaa" for alpha), "inset"}.`,
+    prototypes: `Prototypes, export settings, versions, comments
+- interactions on any shape: [{"trigger": "click", "action": "navigate", "destination": <top-level board>,
+  "animation": {"type": "slide", "direction": "left", "duration": 300}}, {"trigger": "hover", "action":
+  "open-overlay", "destination": <board>, "overlay": {"position": "bottom-center", "closeOnClickOutside": true,
+  "background": true}}, {"trigger": "after-delay", "delay": 1500, "action": "back"}, {"action": "open-url",
+  "url": "https://…"}]. Destinations must exist (create them earlier in the batch).
+- flow {"name": "Checkout", "start": <top-level board>} adds a prototype flow; deleteFlow {"name"}.
+- exports: [{"type": "svg"}, {"type": "png", "scale": 2, "suffix": "@2x"}] stores export settings; export_assets
+  exports them.
+- file_versions: create a named version before big changes, restore if needed (confirm with the user).
+- comments: list feedback, start a thread on a shape, reply, resolve.`,
+};
+
+export class DesignGuideArgs {
+    static schema = {
+        topic: z
+            .enum(["workflow", "components", "vectors", "effects", "text", "layout", "tokens", "prototypes"])
+            .default("workflow")
+            .describe("What to explain."),
+    };
+    topic: keyof typeof GUIDES = "workflow";
+}
+
+export class DesignGuideTool extends HeadlessTool<DesignGuideArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, DesignGuideArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "design_guide";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Explains how to build with the browser-free tools, with examples: workflow (building a complete design " +
+            "system: tokens, library, components, variants, screens, checks), components (variants, copies, swap), " +
+            "vectors (SVG, paths, booleans), effects (gradients, shadows, blur), text (rich text), layout (flex, " +
+            "grid, constraints), tokens, prototypes (interactions, flows, exports, versions, comments). Read " +
+            "workflow before building a design system."
+        );
+    }
+
+    protected async executeCore(args: DesignGuideArgs): Promise<ToolResponse> {
+        return new TextResponse(GUIDES[args.topic ?? "workflow"] ?? GUIDES.workflow);
+    }
+}
+
 // ------------------------------------------------------------------ factory
 
 /**
@@ -1307,6 +1763,11 @@ export function createHeadlessTools(
         new MoveShapesTool(mcpServer, engine, credentials),
         new GetTokensTool(mcpServer, engine, credentials),
         new EditTokensTool(mcpServer, engine, credentials),
+        new AuditDesignTool(mcpServer, engine, credentials),
+        new ExportAssetsTool(mcpServer, engine, credentials),
+        new FileVersionsTool(mcpServer, engine, credentials),
+        new CommentsTool(mcpServer, engine, credentials),
+        new DesignGuideTool(mcpServer, engine, credentials),
     ];
 }
 
@@ -1314,11 +1775,13 @@ export function createHeadlessTools(
 export const HEADLESS_INSTRUCTIONS =
     "\n\nBrowser-free tools are also available: list_files, get_page_overview, render_shape, edit_page, " +
     "create_project, create_file, edit_pages, list_fonts, upload_image, upload_font, import_library, link_library, " +
-    "get_library, edit_library, move_shapes, get_tokens and edit_tokens work directly against the Penpot " +
+    "get_library, edit_library, move_shapes, get_tokens, edit_tokens, audit_design, export_assets, file_versions, " +
+    "comments and design_guide work directly against the Penpot " +
     "backend, without the Penpot MCP plugin and without opening Penpot in a browser. Prefer them when no plugin " +
     "session is connected. Typical flow: list_files → get_page_overview → edit_page → render_shape (only when you " +
     "need to see the result). For a new design: create_project (only if the user wants a new project) → " +
     "create_file with named pages → list_fonts / upload_font / upload_image for the design system's fonts and " +
     "images → import_library or link_library for a .penpot UI kit, get_library to see its components, colors and " +
     "typographies → edit_page using them by name. Design tokens: get_tokens / edit_tokens. To sort boards into " +
-    "pages or put them in a library file: move_shapes.";
+    "pages or put them in a library file: move_shapes. To build a design system (tokens, components, variants, " +
+    "icons, screens) read design_guide first, and check the result with audit_design.";
