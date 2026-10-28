@@ -505,7 +505,7 @@
   fills, compute text position data. Resolves to the state."
   [ctx state variants]
   (p/let [dims  (measure-texts! ctx state variants)
-          state (p/do (edit/second-pass (edit/apply-geometry state dims)))
+          state (p/do (edit/second-pass (edit/apply-rotations (edit/apply-geometry state dims))))
           dims  (measure-texts! ctx state variants)
           state (p/do (edit/regroup (edit/fit-images (edit/apply-geometry state dims))))]
     (add-position-data! ctx state variants)))
@@ -1190,10 +1190,12 @@
       (p/let [file   (rpc ctx :get-file {:id (->uuid (.-fileId opts))})
               source (tokens-source-data! ctx file)]
         (let [src (cfo/get-tokens-source (:data file))]
-          (->js (cond-> (tokens/describe (:data file) source {:set (.-set opts)
-                                                              :type (.-type opts)
-                                                              :search (.-search opts)
-                                                              :limit (.-limit opts)})
+          (->js (cond-> (if (= "dtcg" (some-> (.-format opts) str str/lower))
+                          {:format "dtcg" :json (or (tokens/export-dtcg (:data file) source) {})}
+                          (tokens/describe (:data file) source {:set (.-set opts)
+                                                                :type (.-type opts)
+                                                                :search (.-search opts)
+                                                                :limit (.-limit opts)}))
                   (and src (not= src (:id file)))
                   (assoc :tokensSource {:fileId (str src) :editable false}))))))))
 
@@ -1239,11 +1241,13 @@
           file-id (->uuid (.-fileId opts))]
       (reset-on-error
        (p/let [[file variants] (p/all [(rpc ctx :get-file {:id file-id}) (font-variants! ctx file-id)])
-               {:keys [changes data created]} (p/do (tokens/build-ops (:data file) (ops->clj (.-ops opts))))
+               {:keys [changes data created imported]} (p/do (tokens/build-ops (:data file) (ops->clj (.-ops opts))))
                spread (propagate-tokens! ctx file (:data file) data variants)
                all    (into (vec changes) (:changes spread))
                saved  (save-changes! ctx file all (.-dryRun opts)
-                                     (merge {:changes (count all) :created created :shapesUpdated (:shapes spread)}
+                                     (merge (d/without-nils
+                                             {:changes (count all) :created created :shapesUpdated (:shapes spread)
+                                              :imported imported})
                                             (select-keys (tokens/describe data data {:limit 0}) [:themes :sets])))]
          (->js saved))))))
 
@@ -1364,7 +1368,7 @@
   ([^js file ^js ops ^js query ^js page-ops]
    (guard
     #(p/let [_      (ensure-module!)
-             {:keys [changes data created]} (p/do (tokens/build-ops (:data file) (ops->clj ops)))
+             {:keys [changes data created imported]} (p/do (tokens/build-ops (:data file) (ops->clj ops)))
              spread (propagate-tokens! {} file (:data file) data [])
              all    (into (vec changes) (:changes spread))
              ;; verify? true: the same schema checks as the backend
@@ -1381,6 +1385,8 @@
          #js {:file (assoc file :data data)
               :changes (->js (mapv (fn [c] (select-keys c [:type])) all))
               :created (->js created)
+              :imported (->js imported)
+              :dtcg (->js (tokens/export-dtcg data data))
               :shapesUpdated (:shapes spread)
               :pageCreated (->js (some->> state :refs (into {} (map (fn [[ref id]] [ref (str id)])))))
               :tokens (->js (tokens/describe data data q))

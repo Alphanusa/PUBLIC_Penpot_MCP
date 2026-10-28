@@ -34,6 +34,7 @@
    [app.common.types.tokens-status :as ctos]
    [app.common.types.text :as txt]
    [app.common.uuid :as uuid]
+   [clojure.walk :as walk]
    [cuerdas.core :as str]
    [penpot-mcp.props :as props]
    [penpot-mcp.util :as u]))
@@ -231,7 +232,73 @@
    "deletetheme" [:op :theme]
    "addtoken"    [:op :set :type :name :value :description]
    "updatetoken" [:op :set :token :name :value :description]
-   "deletetoken" [:op :set :token]})
+   "deletetoken" [:op :set :token]
+   "import"      [:op :tokens :mode :setName]})
+
+;; --- DTCG import and export (the Tokens panel's import/export)
+
+(defn- string-keys
+  [v]
+  (walk/postwalk (fn [x]
+                   (if (map? x)
+                     (into {} (map (fn [[k v]] [(if (keyword? k) (u/key-str k) k) v])) x)
+                     x))
+                 v))
+
+(defn- parse-tokens-json
+  "[tokens-lib unknown-types] of DTCG (or Tokens Studio) JSON: one set, or
+  several with $themes and $metadata, like the files the Tokens panel
+  imports. A single set is named `set-name`."
+  [v set-name]
+  (let [decoded (cond
+                  (string? v) (try (js->clj (js/JSON.parse v))
+                                   (catch :default e
+                                     (u/error! (str "tokens is not valid JSON: " (ex-message e)) {:field "tokens"})))
+                  (map? v) (string-keys v)
+                  :else nil)]
+    (when-not (map? decoded)
+      (u/error! (str "tokens must be DTCG JSON (an object or its text), e.g. "
+                     "{\"color\": {\"primary\": {\"$type\": \"color\", \"$value\": \"#3366ff\"}}}")
+                {:field "tokens"}))
+    (try
+      [(ctob/parse-decoded-json decoded set-name)
+       (not-empty (ctob/get-tokens-of-unknown-type decoded {}))]
+      (catch :default e
+        (u/error! (str "Could not read the tokens: " (ex-message e)) {:field "tokens"})))))
+
+(defn- merge-libs
+  "`cur` with the sets, tokens and themes of `new`: same-named tokens and
+  themes are updated, the rest added."
+  [cur new]
+  (let [lib (reduce (fn [lib set]
+                      (let [n        (ctob/get-name set)
+                            existing (ctob/get-set-by-name lib n)]
+                        (if existing
+                          (reduce (fn [lib token]
+                                    (if-let [old (ctob/get-token-by-name lib n (:name token))]
+                                      (ctob/update-token lib (ctob/get-id existing) (:id old)
+                                                         #(assoc % :type (:type token) :value (:value token)
+                                                                 :description (:description token)))
+                                      (ctob/add-token lib (ctob/get-id existing) token)))
+                                  lib
+                                  (vals (ctob/get-tokens new (ctob/get-id set))))
+                          (ctob/add-set lib set))))
+                    (or cur (ctob/make-tokens-lib))
+                    (ctob/get-sets new))]
+    (reduce (fn [lib theme]
+              (if-let [old (ctob/get-theme-by-name lib (:group theme) (:name theme))]
+                (ctob/update-theme lib (:id old) #(assoc % :sets (:sets theme) :description (:description theme)))
+                (ctob/add-theme lib theme)))
+            lib
+            (ctob/get-themes-no-hidden new))))
+
+(defn export-dtcg
+  "The tokens of `source-data` as DTCG JSON (one object with every set,
+  $themes and $metadata), like the Tokens panel's export; nil without
+  tokens."
+  [data source-data]
+  (when-let [l (cfo/get-tokens-lib source-data)]
+    (ctob/export-dtcg-json l (or (cfo/get-tokens-status data) (ctos/make-tokens-status)))))
 
 (defn- text!
   [v field & {:keys [blank?]}]
@@ -396,7 +463,7 @@
   (let [kind    (some-> (:op op) str str/lower)
         allowed (or (get op-props kind)
                     (u/error! (str "Unknown op " (pr-str (:op op)) ". Use addSet, updateSet, deleteSet, addTheme, "
-                                   "updateTheme, deleteTheme, addToken, updateToken or deleteToken")
+                                   "updateTheme, deleteTheme, addToken, updateToken, deleteToken or import")
                               {:field "op"}))
         _       (props/check-keys! op allowed (str "for " (:op op)))
         data    (:data state)]
@@ -483,7 +550,27 @@
       "deletetoken"
       (let [set   (find-set data (:set op))
             token (find-token data set (:token op))]
-        (step state #(pcb/set-token % (ctob/get-id set) (:id token) nil))))))
+        (step state #(pcb/set-token % (ctob/get-id set) (:id token) nil)))
+
+      "import"
+      (let [mode   (or (some-> (:mode op) str str/lower) "merge")
+            _      (when-not (#{"merge" "replace"} mode)
+                     (u/error! "mode must be \"merge\" (add and update) or \"replace\" (the import becomes the file's tokens)"
+                               {:field "mode"}))
+            [new unknown] (parse-tokens-json (:tokens op) (or (some-> (:setName op) (text! "setName")) "imported"))
+            result (if (= mode "replace") new (merge-libs (lib data) new))
+            sets   (ctob/get-sets new)
+            st     (step state (fn [changes]
+                                 (cond-> (pcb/set-tokens-lib changes result)
+                                   (= mode "replace") (pcb/set-tokens-status (cfo/make-tokens-status-from-lib new)))))]
+        (-> (if (= mode "merge") (sync-status st) st)
+            (update :imported (fnil conj [])
+                    (d/without-nils
+                     {:mode mode
+                      :sets (mapv ctob/get-name sets)
+                      :tokens (reduce + 0 (map #(count (ctob/get-tokens new (ctob/get-id %))) sets))
+                      :themes (mapv ctob/get-theme-path (ctob/get-themes-no-hidden new))
+                      :unknownTypes unknown})))))))
 
 (defn build-ops
   "Applies token `ops` to file `data` (its own tokens). Returns {:changes
@@ -526,7 +613,24 @@
    :fontSize      {:types (conj number-types :font-size) :attrs [:font-size] :as :number}
    :fontFamily    {:types #{:font-family} :attrs [:font-family] :as :font-family}
    :fontWeight    {:types #{:font-weight} :attrs [:font-weight] :as :font-weight}
-   :letterSpacing {:types (conj number-types :letter-spacing) :attrs [:letter-spacing] :as :number}})
+   :letterSpacing {:types (conj number-types :letter-spacing) :attrs [:letter-spacing] :as :number}
+   :lineHeight    {:types #{:number} :attrs [:line-height] :as :line-height}
+   :textCase      {:types #{:text-case} :attrs [:text-case] :as :text-case}
+   :textDecoration {:types #{:text-decoration} :attrs [:text-decoration] :as :text-decoration}
+   :typography    {:types #{:typography} :attrs [:typography] :as :typography}
+   :shadow        {:types #{:shadow} :attrs [:shadow] :as :shadow}
+   :strokeWidth   {:types (conj number-types :stroke-width)
+                   :attrs [:stroke-width-top :stroke-width-right :stroke-width-bottom :stroke-width-left] :as :number}
+   :rotation      {:types #{:rotation :number} :attrs [:rotation] :as :number}
+   :margin        {:types (conj number-types :spacing) :attrs [:m1 :m2 :m3 :m4] :as :number}
+   :minWidth      {:types (conj number-types :sizing) :attrs [:layout-item-min-w] :as :number}
+   :maxWidth      {:types (conj number-types :sizing) :attrs [:layout-item-max-w] :as :number}
+   :minHeight     {:types (conj number-types :sizing) :attrs [:layout-item-min-h] :as :number}
+   :maxHeight     {:types (conj number-types :sizing) :attrs [:layout-item-max-h] :as :number}})
+
+(def typography-token-props
+  "Text props a typography token sets."
+  [:fontFamily :fontSize :fontWeight :lineHeight :letterSpacing :textTransform :textDecoration])
 
 (def target-props (vec (sort (map name (keys targets)))))
 
@@ -551,7 +655,25 @@
       (contains? op :fontFamily) (conj :font-family)
       (contains? op :fontWeight) (conj :font-weight)
       (contains? op :letterSpacing) (conj :letter-spacing)
-      (contains? op :typography) (into [:font-size :font-family :font-weight :letter-spacing]))))
+      (contains? op :lineHeight) (conj :line-height)
+      (contains? op :textTransform) (conj :text-case)
+      (contains? op :textDecoration) (conj :text-decoration)
+      (some #(contains? op %) [:fontSize :fontFamily :fontWeight :letterSpacing :lineHeight :textTransform
+                               :textDecoration :typography :spans])
+      (conj :typography)
+      (contains? op :typography) (into [:font-size :font-family :font-weight :letter-spacing :line-height
+                                        :text-case :text-decoration])
+      (contains? op :shadow) (conj :shadow)
+      (and (map? (:stroke op)) (contains? (:stroke op) :width))
+      (into [:stroke-width-top :stroke-width-right :stroke-width-bottom :stroke-width-left])
+      (or (nil? (:stroke op)) (= "none" (:stroke op)))
+      (cond-> (contains? op :stroke) (into [:stroke-width-top :stroke-width-right :stroke-width-bottom :stroke-width-left]))
+      (contains? op :rotation) (conj :rotation)
+      (contains? op :margin) (into [:m1 :m2 :m3 :m4])
+      (contains? op :minWidth) (conj :layout-item-min-w)
+      (contains? op :maxWidth) (conj :layout-item-max-w)
+      (contains? op :minHeight) (conj :layout-item-min-h)
+      (contains? op :maxHeight) (conj :layout-item-max-h))))
 
 (defn- hex-color
   "{:color \"#rrggbb\" :opacity} of \"#rgb\", \"#rrggbb\" or \"#rrggbbaa\"."
@@ -578,6 +700,76 @@
         [_ pct] (re-matches #"^(\d*\.?\d+)%$" s)
         n (if pct (/ (js/parseFloat pct) 100) (dimension s))]
     (when (and (number? n) (<= 0 n 1)) n)))
+
+(defn- text-case-value
+  [v]
+  (let [v (str/lower (str/trim (str v)))]
+    (when (contains? #{"none" "uppercase" "lowercase" "capitalize"} v) v)))
+
+(defn- text-decoration-value
+  [v]
+  (case (str/lower (str/trim (str v)))
+    "none" "none"
+    "underline" "underline"
+    ("strike-through" "line-through" "strikethrough") "line-through"
+    nil))
+
+(defn- line-height-value
+  "A line height as Penpot texts keep it (a ratio of the font size) from
+  1.5, \"150%\" or \"24px\" (with the font size)."
+  [v font-size]
+  (let [s (str/trim (str v))
+        [_ pct] (re-matches #"^(\d*\.?\d+)%$" s)
+        [_ px]  (re-matches #"^(\d*\.?\d+)px$" s)]
+    (cond
+      pct (/ (js/parseFloat pct) 100)
+      (and px (number? font-size) (pos? font-size)) (/ (js/Math.round (* (/ (js/parseFloat px) font-size) 1000)) 1000)
+      :else (dimension s))))
+
+(defn- font-family-value
+  [v]
+  (let [f (if (sequential? v) (first v) (first (str/split (str v) #",")))]
+    (when-not (str/blank? (str f))
+      (str/replace (str/trim (str f)) #"^[\"']+|[\"']+$" ""))))
+
+(defn- font-weight-value
+  [v]
+  (when (or (string? v) (number? v))
+    (first (str/split (str/trim (str v)) #"\s+"))))
+
+(defn- typography-value
+  "edit_page text props from a resolved typography token value."
+  [v]
+  (when (map? v)
+    (let [v    (into {} (map (fn [[k x]] [(keyword (str/kebab (name k))) x])) v)
+          size (some-> (:font-size v) dimension)]
+      (d/without-nils
+       {:fontFamily (some-> (:font-family v) font-family-value)
+        :fontSize size
+        :fontWeight (some-> (:font-weight v) font-weight-value)
+        :lineHeight (some-> (:line-height v) (line-height-value size))
+        :letterSpacing (some-> (:letter-spacing v) dimension)
+        :textTransform (some-> (:text-case v) text-case-value)
+        :textDecoration (some-> (:text-decoration v) text-decoration-value)}))))
+
+(defn- shadow-value
+  "edit_page shadows from a resolved shadow token value."
+  [v]
+  (let [items (cond (map? v) [v] (sequential? v) v)]
+    (when (and (seq items) (every? map? items))
+      (let [out (mapv (fn [sh]
+                        (let [sh (into {} (map (fn [[k x]] [(keyword (str/kebab (name k))) x])) sh)
+                              c  (hex-color (:color sh))]
+                          (when c
+                            {:style (if (contains? #{true "true"} (:inset sh)) "inner" "drop")
+                             :x (or (dimension (:offset-x sh)) 0)
+                             :y (or (dimension (:offset-y sh)) 0)
+                             :blur (max 0 (or (dimension (:blur sh)) 0))
+                             :spread (or (dimension (:spread sh)) 0)
+                             :color (:color c)
+                             :opacity (:opacity c)})))
+                      items)]
+        (when (every? some? out) out)))))
 
 (defn shape-props
   "The edit_page props that `m` ({prop token-name}) stands for, from the
@@ -609,11 +801,13 @@
                     :color       (or (hex-color value) (bad "not a hex color"))
                     :number      (or (dimension value) (bad "not a number"))
                     :opacity     (or (opacity-value value) (bad "not an opacity from 0 to 1"))
-                    :font-family (let [f (if (sequential? value) (first value) (first (str/split (str value) #",")))]
-                                   (if (str/blank? (str f)) (bad "not a font family") (str/trim (str f))))
-                    :font-weight (if (or (string? value) (number? value))
-                                   (first (str/split (str/trim (str value)) #"\s+"))
-                                   (bad "not a font weight")))]
+                    :font-family (or (font-family-value value) (bad "not a font family"))
+                    :font-weight (or (font-weight-value value) (bad "not a font weight"))
+                    :line-height (or (line-height-value value nil) (bad "not a line height"))
+                    :text-case   (or (text-case-value value) (bad "not none, uppercase, lowercase or capitalize"))
+                    :text-decoration (or (text-decoration-value value) (bad "not none, underline or strike-through"))
+                    :typography  (or (not-empty (typography-value value)) (bad "not a typography"))
+                    :shadow      (or (shadow-value value) (bad "not a shadow")))]
        (-> acc
            (assoc-in [:props prop] v)
            (update :applied merge (zipmap (:attrs target) (repeat token-name))))))
@@ -643,8 +837,12 @@
   groups first."
   [[:fill [:fill]] [:stroke [:stroke-color]] [:radius [:r1 :r2 :r3 :r4]] [:opacity [:opacity]]
    [:width [:width]] [:height [:height]] [:gap [:row-gap :column-gap]] [:rowGap [:row-gap]]
-   [:columnGap [:column-gap]] [:padding [:p1 :p2 :p3 :p4]] [:fontSize [:font-size]]
-   [:fontFamily [:font-family]] [:fontWeight [:font-weight]] [:letterSpacing [:letter-spacing]]])
+   [:columnGap [:column-gap]] [:padding [:p1 :p2 :p3 :p4]] [:typography [:typography]] [:fontSize [:font-size]]
+   [:fontFamily [:font-family]] [:fontWeight [:font-weight]] [:letterSpacing [:letter-spacing]]
+   [:lineHeight [:line-height]] [:textCase [:text-case]] [:textDecoration [:text-decoration]]
+   [:shadow [:shadow]] [:strokeWidth [:stroke-width-top :stroke-width-right :stroke-width-bottom :stroke-width-left]]
+   [:rotation [:rotation]] [:margin [:m1 :m2 :m3 :m4]] [:minWidth [:layout-item-min-w]]
+   [:maxWidth [:layout-item-max-w]] [:minHeight [:layout-item-min-h]] [:maxHeight [:layout-item-max-h]]])
 
 (defn- applicable?
   [tokens prop token-name]

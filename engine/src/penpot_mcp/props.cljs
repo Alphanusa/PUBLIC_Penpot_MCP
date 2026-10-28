@@ -25,7 +25,7 @@
 (def sizing-props [:h :v])
 (def fill-props [:color :gradient :image :fit :opacity])
 
-(def ^:private geometry-props [:x :y :width :height])
+(def ^:private geometry-props [:x :y :width :height :rotation])
 (def ^:private item-props
   "Options of a shape inside a layout, and constraints outside layouts."
   [:margin :minWidth :maxWidth :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints])

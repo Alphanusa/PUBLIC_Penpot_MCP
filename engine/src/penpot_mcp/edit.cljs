@@ -223,10 +223,10 @@
 (defn- gradient!
   "A gradient from {type: linear|radial, angle (CSS degrees, 180 = top to
   bottom), start/end ([x, y] as fractions of the shape), stops: [{color,
-  opacity, offset}] or ["#rrggbb", …] (evenly spread)}."
+  opacity, offset}] or [\"#rrggbb\", …] (evenly spread)}."
   [g field]
   (when-not (map? g)
-    (error! (str field " must be an object like {"type": "linear", "angle": 90, "stops": ["#3366ff", "#00aa88"]}")
+    (error! (str field " must be an object like {\"type\": \"linear\", \"angle\": 90, \"stops\": [\"#3366ff\", \"#00aa88\"]}")
             {:field field}))
   (props/check-keys! g [:type :angle :stops :start :end :width] (str "in \"" field "\""))
   (let [type  (or (->kw (:type g) #{:linear :radial} (str field ".type")) :linear)
@@ -757,6 +757,9 @@
 
 ;; --- design tokens on shapes
 
+(def ^:private text-token-props
+  #{:fontSize :fontFamily :fontWeight :letterSpacing :lineHeight :textCase :textDecoration :typography})
+
 (defn- with-token-props
   "`op` with the props its `tokens` ({prop token-name}) stand for, and the
   applied-tokens to record: [op applied]. `shape` is the shape an update
@@ -769,20 +772,26 @@
                    (error! (str "tokens must map properties to token names, e.g. "
                                 "{\"fill\": \"color.primary\", \"padding\": \"space.md\"}")
                            {:field "tokens" :value m}))
+          _      (when-let [k (and (not= type :text) (d/seek text-token-props (keys m)))]
+                   (error! (str "tokens." (name k) " applies to texts") {:field (str "tokens." (name k))}))
           {:keys [props applied]} (tokens/shape-props (:tokens state) m)
           text?  (= type :text)
           lkeys  [:gap :rowGap :columnGap :padding]
           layout (select-keys props lkeys)
-          top    (apply dissoc props lkeys)
+          top    (-> (apply dissoc props :typography :textCase :strokeWidth lkeys)
+                     (merge (:typography props))
+                     (cond-> (:textCase props) (assoc :textTransform (:textCase props))))
           _      (doseq [k (keys top)
                          :when (and (contains? op k)
                                     (not (and (= k :stroke) (map? (:stroke op)) (not (contains? (:stroke op) :color)))))]
                    (error! (str "Set either \"" (name k) "\" or tokens." (name k) ", not both") {:field (name k)}))
+          _      (when (and (:strokeWidth props) (map? (:stroke op)) (contains? (:stroke op) :width))
+                   (error! "Set either stroke.width or tokens.strokeWidth, not both" {:field "stroke.width"}))
           _      (doseq [k (keys layout)
                          :when (and (map? (:layout op)) (contains? (:layout op) k))]
                    (error! (str "Set either layout." (name k) " or tokens." (name k) ", not both") {:field (name k)}))
-          _      (when (and (seq layout) (not (map? (:layout op))) (not (ctl/flex-layout? shape)))
-                   (error! "gap and padding tokens apply to boards with a flex layout: set \"layout\" too"
+          _      (when (and (seq layout) (not (map? (:layout op))) (not (ctl/any-layout? shape)))
+                   (error! "gap and padding tokens apply to boards with a flex or grid layout: set \"layout\" too"
                            {:field "tokens"}))
           stroke (when-let [{:keys [color opacity]} (:stroke top)]
                    (let [current (some-> shape :strokes first)]
@@ -791,14 +800,33 @@
                               :align (some-> (:stroke-alignment current) name)})
                             (when (map? (:stroke op)) (:stroke op))
                             (d/without-nils {:color color :opacity (when (< opacity 1) opacity)}))))
+          stroke (cond
+                   (nil? (:strokeWidth props)) stroke
+                   (some? stroke) (assoc stroke :width (:strokeWidth props))
+                   (map? (:stroke op)) (assoc (:stroke op) :width (:strokeWidth props))
+                   (string? (:stroke op)) {:color (:stroke op) :width (:strokeWidth props)}
+                   :else nil)
           fill   (when-let [{:keys [color opacity]} (:fill top)]
                    (if (or text? (= 1 opacity)) color {:color color :opacity opacity}))
           op     (cond-> (merge (dissoc op :tokens) (dissoc top :stroke :fill :textColor))
                    (some? fill) (assoc :fill fill)
                    (:textColor top) (assoc :textColor (:color (:textColor top)))
                    (some? stroke) (assoc :stroke stroke)
+                   (and (:strokeWidth props) (nil? stroke)) (assoc ::stroke-width (:strokeWidth props))
                    (seq layout) (assoc :layout (merge (when (map? (:layout op)) (:layout op)) layout)))]
       [op applied])))
+
+(defn- with-stroke-width
+  "`shape` with the width of its first stroke set (a black stroke when it
+  has none), like applying a stroke width token in the editor."
+  [shape width]
+  (let [sides {:stroke-width width :stroke-width-top width :stroke-width-right width
+               :stroke-width-bottom width :stroke-width-left width}]
+    (if (seq (:strokes shape))
+      (update shape :strokes #(into [(merge (first %) sides)] (rest %)))
+      (assoc shape :strokes [(merge {:stroke-alignment :inner :stroke-style :solid :stroke-color "#000000"
+                                     :stroke-opacity 1}
+                                    sides)]))))
 
 (defn- update-applied
   "`shape` without the applied tokens of `unapply` and with `applied`."
@@ -933,10 +961,11 @@
                                                  []
                                                  [{:stroke-color "#000000" :stroke-opacity 1 :stroke-width 1
                                                    :stroke-style :solid :stroke-alignment :center}])})
-                    (apply-attrs (prop-attrs state :path (dissoc op :x :y :width :height :sizing)))
-                    (cond-> (seq applied) (update-applied [] applied)))
+                    (apply-attrs (prop-attrs state :path (dissoc op :x :y :width :height :sizing :rotation)))
+                    (cond-> (seq applied) (update-applied [] applied))
+                    (cond-> (::stroke-width op) (with-stroke-width (::stroke-width op))))
         state   (add-shapes state shape [] parent ref)
-        more    (select-keys op [:x :y :width :height :sizing])]
+        more    (select-keys op [:x :y :width :height :sizing :rotation])]
     (if (seq more)
       (op-update state (assoc more :op "update" :id (str id)))
       state)))
@@ -990,6 +1019,7 @@
                       (cond-> image? (assoc :fills [img-fill]))
                       (cond-> (= type* :frame) (with-layout (layout-attrs (:layout op))))
                       (cond-> (seq applied) (update-applied [] applied))
+                      (cond-> (::stroke-width op) (with-stroke-width (::stroke-width op)))
                       (cond-> text? (dissoc :position-data)))
         ;; like the workspace (Plugin API appendChild): in a flex/grid board the
         ;; new child goes to index 0 of :shapes, which is the end of the layout
@@ -999,6 +1029,7 @@
         state     (cond-> (assoc state :changes changes)
                     (some? ref) (update :refs assoc (str ref) id)
                     true (update :created conj id)
+                    (some? (:rotation op)) (update :rotate assoc id (number! (:rotation op) "rotation"))
                     (= :contain (image-fit op)) (update :contain conj id)
                     text? (update :texts conj id)
                     (ctl/any-layout? shape) (update :reflow conj id))]
@@ -1112,6 +1143,7 @@
         update-fn (fn [shape]
                     (cond-> (apply-attrs shape attrs)
                       (or (seq unapply) (seq applied)) (update-applied unapply applied)
+                      (::stroke-width op) (with-stroke-width (::stroke-width op))
                       (some? layout) (with-layout layout)
                       (some? content) (path/update-geometry content)
                       (and text? (text-op? op)) (-> (assoc :content (text-content state (:content shape) op))
@@ -1121,6 +1153,7 @@
                   tint (pcb/update-shapes (cfh/get-children-ids-with-self objects id) #(vector/recolor % tint)))
         modifs  (geometry-modifiers objects shape op)
         state   (cond-> (assoc state :changes changes)
+                  (contains? op :rotation) (update :rotate assoc id (number! (:rotation op) "rotation"))
                   (some? content) (update :regroup conj id)
                   (and (contains? op :fill) (not= :contain fit)) (update :contain disj id)
                   (= :contain fit) (update :contain conj id)
@@ -1947,7 +1980,7 @@
   [page-id objects {:keys [fonts media libraries file-id tokens]}]
   {:changes (-> (pcb/empty-changes :mcp page-id)
                 (pcb/with-objects objects))
-   :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{} :regroup #{}
+   :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{} :regroup #{} :rotate {}
    :fonts (vec fonts)
    :media (or media {})
    :tokens (or tokens {})
@@ -2168,6 +2201,35 @@
                                                    (gsh/transform-shape shape (get-in result [(:id shape) :modifiers])))
                                                  (d/without-nils {:attrs transform-attrs
                                                                   :ignore-geometry? (get ignore id)})))
+                            (:changes state)
+                            ids)]
+        (-> state
+            (assoc :changes changes)
+            (update :moved (fnil into #{}) ids))))))
+
+(defn apply-rotations
+  "Rotates the shapes given a `rotation` in the batch, around their center,
+  once their size and position are set (like the rotation field of the
+  design tab). Children rotate with their board or group."
+  [state]
+  (let [objects (objects-of state)
+        tree    (into {}
+                      (keep (fn [[id angle]]
+                              (when-let [shape (get objects id)]
+                                (let [delta (- angle (or (:rotation shape) 0))]
+                                  (when-not (zero? (mod delta 360))
+                                    [id {:modifiers (ctm/rotation-modifiers shape (gsh/shape->center shape) delta)}])))))
+                      (:rotate state))
+        state   (assoc state :rotate {})]
+    (if (empty? tree)
+      state
+      (let [result  (gm/set-objects-modifiers tree objects {:ignore-constraints false})
+            ids     (into [] (comp (map key) (remove #(= % uuid/zero))) result)
+            changes (reduce (fn [changes id]
+                              (pcb/update-shapes changes [id]
+                                                 (fn [shape]
+                                                   (gsh/transform-shape shape (get-in result [(:id shape) :modifiers])))
+                                                 {:attrs transform-attrs}))
                             (:changes state)
                             ids)]
         (-> state
@@ -2463,6 +2525,7 @@
         :stroke (stroke-summary names shape)
         :radius (radius-summary shape)
         :opacity (when (and (number? o) (< o 1)) (round o))
+        :rotation (let [r (:rotation shape)] (when (and (number? r) (not (zero? (round r)))) (round r)))
         :text (when text? (txt/content->text (:content shape)))})
       (when text? (text-summary names shape))
       (d/without-nils
