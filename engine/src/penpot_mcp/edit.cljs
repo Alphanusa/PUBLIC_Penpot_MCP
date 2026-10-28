@@ -30,6 +30,7 @@
   `(:changes state)` holds the redo changes to send with `update-file`."
   (:require
    [app.common.data :as d]
+   [app.common.files.changes :as cfc]
    [app.common.files.changes-builder :as pcb]
    [app.common.files.helpers :as cfh]
    [app.common.files.shapes-helpers :as cfsh]
@@ -37,6 +38,7 @@
    [app.common.geom.point :as gpt]
    [app.common.geom.shapes :as gsh]
    [app.common.logic.libraries :as cll]
+   [app.common.logic.shapes :as cls]
    [app.common.render-wasm.api.select :as wselect]
    [app.common.render-wasm.helpers :as h]
    [app.common.render-wasm.mem :as mem]
@@ -51,7 +53,9 @@
    [cuerdas.core :as str]
    [penpot-mcp.fonts :as fonts]
    [penpot-mcp.library :as library]
+   [penpot-mcp.link :as link]
    [penpot-mcp.props :as props]
+   [penpot-mcp.tokens :as tokens]
    [penpot-mcp.touched :as touched]
    [penpot-mcp.util :as u]))
 
@@ -438,6 +442,57 @@
     ::remove (apply dissoc shape layout-keys)
     (merge (if (ctl/flex-layout? shape) shape (merge shape initial-flex-layout)) layout)))
 
+;; --- design tokens on shapes
+
+(defn- with-token-props
+  "`op` with the props its `tokens` ({prop token-name}) stand for, and the
+  applied-tokens to record: [op applied]. `shape` is the shape an update
+  changes (nil on create), `type` its type."
+  [state op shape type]
+  (if-not (contains? op :tokens)
+    [op nil]
+    (let [m      (:tokens op)
+          _      (when-not (and (map? m) (seq m) (every? string? (vals m)))
+                   (error! (str "tokens must map properties to token names, e.g. "
+                                "{\"fill\": \"color.primary\", \"padding\": \"space.md\"}")
+                           {:field "tokens" :value m}))
+          {:keys [props applied]} (tokens/shape-props (:tokens state) m)
+          text?  (= type :text)
+          lkeys  [:gap :rowGap :columnGap :padding]
+          layout (select-keys props lkeys)
+          top    (apply dissoc props lkeys)
+          _      (doseq [k (keys top)
+                         :when (and (contains? op k)
+                                    (not (and (= k :stroke) (map? (:stroke op)) (not (contains? (:stroke op) :color)))))]
+                   (error! (str "Set either \"" (name k) "\" or tokens." (name k) ", not both") {:field (name k)}))
+          _      (doseq [k (keys layout)
+                         :when (and (map? (:layout op)) (contains? (:layout op) k))]
+                   (error! (str "Set either layout." (name k) " or tokens." (name k) ", not both") {:field (name k)}))
+          _      (when (and (seq layout) (not (map? (:layout op))) (not (ctl/flex-layout? shape)))
+                   (error! "gap and padding tokens apply to boards with a flex layout: set \"layout\" too"
+                           {:field "tokens"}))
+          stroke (when-let [{:keys [color opacity]} (:stroke top)]
+                   (let [current (some-> shape :strokes first)]
+                     (merge (d/without-nils
+                             {:width (:stroke-width current)
+                              :align (some-> (:stroke-alignment current) name)})
+                            (when (map? (:stroke op)) (:stroke op))
+                            (d/without-nils {:color color :opacity (when (< opacity 1) opacity)}))))
+          fill   (when-let [{:keys [color opacity]} (:fill top)]
+                   (if (or text? (= 1 opacity)) color {:color color :opacity opacity}))
+          op     (cond-> (merge (dissoc op :tokens) (dissoc top :stroke :fill :textColor))
+                   (some? fill) (assoc :fill fill)
+                   (:textColor top) (assoc :textColor (:color (:textColor top)))
+                   (some? stroke) (assoc :stroke stroke)
+                   (seq layout) (assoc :layout (merge (when (map? (:layout op)) (:layout op)) layout)))]
+      [op applied])))
+
+(defn- update-applied
+  "`shape` without the applied tokens of `unapply` and with `applied`."
+  [shape unapply applied]
+  (let [m (merge (apply dissoc (:applied-tokens shape) unapply) applied)]
+    (if (seq m) (assoc shape :applied-tokens m) (dissoc shape :applied-tokens))))
+
 ;; --- operations
 
 (def ^:private shape-types
@@ -492,6 +547,7 @@
                       (error! (str "Invalid type " (pr-str type) ". Use frame, rect, ellipse, text or image")
                               {:field "type" :value type}))
         _         (props/check-shape-op! :create kind op)
+        [op applied] (with-token-props state op nil (if (= kind :image) :rect kind))
         image?    (= kind :image)
         type*     (if image? :rect kind)
         objects   (objects-of state)
@@ -532,6 +588,7 @@
                                                        image? (dissoc :fillOpacity))))
                       (cond-> image? (assoc :fills [img-fill]))
                       (cond-> (= type* :frame) (with-layout (layout-attrs (:layout op))))
+                      (cond-> (seq applied) (update-applied [] applied))
                       (cond-> text? (dissoc :position-data)))
         ;; like the workspace (Plugin API appendChild): in a flex/grid board the
         ;; new child goes to index 0 of :shapes, which is the end of the layout
@@ -568,7 +625,12 @@
     (error! "texts must map text layer names to texts, e.g. {\"Label\": \"Save\"}" {:field "texts" :value texts}))
   (let [objects   (objects-of state)
         comp      (library/find-asset (:assets state) :components component "component" variant)
-        data      (library/library-data (:libraries state) comp)
+        data      (cond-> (library/library-data (:libraries state) comp)
+                    ;; a component of this file made from a board of this page:
+                    ;; its main as it is now, earlier ops of the batch included
+                    (and (= (::library/file-id comp) (::file-id state))
+                         (= (:main-instance-page comp) (::page-id state)))
+                    (assoc-in [:pages-index (::page-id state) :objects] objects))
         _         (when-not (library/main-shape data comp)
                     (error! (str "The main instance of component " (pr-str component) " was not found in its library")
                             {:field "component"}))
@@ -637,12 +699,15 @@
         shape   (or (get objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
         type    (:type shape)
         _       (props/check-shape-op! :update type op)
+        unapply (tokens/unapplied-attrs op)
+        [op applied] (with-token-props state op shape type)
         text?   (= type :text)
         layout  (when (= type :frame) (layout-attrs (:layout op)))
         attrs   (prop-attrs state type op)
         fit     (image-fit op)
         update-fn (fn [shape]
                     (cond-> (merge shape attrs)
+                      (or (seq unapply) (seq applied)) (update-applied unapply applied)
                       (some? layout) (with-layout layout)
                       (and text? (text-op? op)) (-> (assoc :content (text-content state (:content shape) op))
                                                     (dissoc :position-data))))
@@ -669,6 +734,22 @@
         (assoc :changes changes)
         (update :deleted into ids))))
 
+(defn- add-own-component
+  "Makes component `component-id`, just added to the file's own library,
+  usable by the next ops of the batch (copies of it, by name)."
+  [state component-id]
+  (let [file-id (::file-id state)
+        change  (d/seek #(and (= :add-component (:type %)) (= component-id (:id %)))
+                        (:redo-changes (:changes state)))
+        own     (get-in state [:libraries file-id])]
+    (if (and change own)
+      (let [libs (assoc-in (:libraries state) [file-id :data]
+                           (cfc/process-changes (or (:data own) {}) [change] false))]
+        (assoc state
+               :libraries libs
+               :assets (library/index (cons (get libs file-id) (vals (dissoc libs file-id))))))
+      state)))
+
 (defn- op-make-component
   "Turns a board into a main component of the file's library, like
   \"Create component\" in the editor (`generate-add-component`). The board
@@ -691,7 +772,110 @@
                                     cfsh/prepare-create-artboard-from-selection)]
     (-> state
         (assoc :changes changes)
-        (update :components (fnil conj []) component-id))))
+        (update :components (fnil conj []) component-id)
+        (add-own-component component-id))))
+
+(defn- layer-index!
+  [v n]
+  (if (and (integer? v) (>= v 0))
+    (min v n)
+    (error! (str "Invalid index " (pr-str v) " (expected 0 for the first layer, 1 for the second, …)")
+            {:field "index" :value v})))
+
+(defn- op-move
+  "Re-parents and/or reorders a shape, like dragging it in the layers panel
+  (Penpot's `generate-relocate`). `index` counts like the layers panel: 0 is
+  the top layer, which in a flex board is the first item of the layout.
+  Without `index`, a shape moved to a flex board goes to the end of the
+  layout, and to another parent on top of its siblings, like a new shape.
+  Outside a layout the shape keeps its position on the page unless `x`/`y`
+  (relative to the new parent) are given."
+  [state op]
+  (props/check-keys! op [:op :id :parent :index :x :y] "for move")
+  (let [objects    (objects-of state)
+        id         (or (resolve-id state (:id op) "id") (error! "move needs an id" {:field "id"}))
+        shape      (or (get objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
+        _          (when-not (or (contains? op :parent) (contains? op :index))
+                     (error! (str "move needs \"parent\" (a board or group id or ref, or null for the page root) "
+                                  "and/or \"index\" (position among the parent's layers, 0 = top / first in a layout)")
+                             {:field "op"}))
+        old-parent (:parent-id shape)
+        parent-id  (if (contains? op :parent)
+                     (let [p (:parent op)]
+                       (if (or (nil? p) (= "root" p) (= "page" p))
+                         uuid/zero
+                         (resolve-id state p "parent")))
+                     old-parent)
+        parent     (or (get objects parent-id)
+                       (error! (str "Parent " parent-id " not found on this page") {:field "parent"}))
+        _          (when-not (#{:frame :group} (:type parent))
+                     (error! "Parent must be a board (frame) or a group" {:field "parent"}))
+        _          (when (or (= parent-id id) (cfh/is-parent? objects parent-id id))
+                     (error! "A shape can't be moved into itself or one of its children" {:field "parent"}))
+        _          (when (or (ctk/in-component-copy? (get objects old-parent)) (ctk/in-component-copy? parent))
+                     (error! (str "The layers of a component copy can't be moved or reordered (the copy follows its "
+                                  "main component): change the main component instead")
+                             {:field "id"}))
+        _          (when (cfh/components-nesting-loop? objects id parent-id)
+                     (error! "This would put a component inside itself" {:field "parent"}))
+        siblings   (filterv #(not= % id) (:shapes parent))
+        n          (count siblings)
+        layout?    (ctl/any-layout? parent)
+        pos        (if (contains? op :index)
+                     (layer-index! (:index op) n)
+                     (if layout? n 0))
+        ;; :shapes lists the bottom layer first, so layer position `pos` is
+        ;; index n - pos; :mov-objects inserts before removing the shape
+        ;; from the list, so moving it up within its parent needs index + 1
+        target     (- n pos)
+        current    (when (= parent-id old-parent) (d/index-of (:shapes parent) id))
+        param      (if (and (some? current) (< current target)) (inc target) target)
+        own        (get-in state [:libraries (::file-id state) :data])
+        state      (if (= current target)
+                     state
+                     (-> state
+                         (assoc :changes (-> (:changes state)
+                                             (cond-> (seq own) (pcb/with-library-data own))
+                                             (cls/generate-relocate parent-id param [id])))
+                         (cond-> (ctl/any-layout? objects old-parent) (update :reflow conj old-parent))
+                         (cond-> layout? (update :reflow conj parent-id))))
+        state      (update state :relocated (fnil conj []) id)]
+    (if (or (contains? op :x) (contains? op :y))
+      (op-update state (assoc (select-keys op [:x :y]) :op "update" :id (str id)))
+      state)))
+
+(defn- op-link-assets
+  "Links raw colors (and, with typographies, text styles) of the page or a
+  board's subtree to the library assets with the same values (see
+  `penpot-mcp.link`)."
+  [state op]
+  (props/check-keys! op [:op :scope :colors :typographies :prefer] "for linkAssets")
+  (let [objects  (objects-of state)
+        scope    (:scope op)
+        scope-id (if (or (nil? scope) (= "page" scope)) uuid/zero (resolve-id state scope "scope"))
+        _        (when-not (contains? objects scope-id)
+                   (error! (str "Shape " scope-id " not found on this page") {:field "scope"}))
+        colors?  (not (false? (bool! (:colors op) "colors")))
+        typos?   (true? (bool! (:typographies op) "typographies"))
+        _        (when-not (or colors? typos?)
+                   (error! "linkAssets with colors false needs typographies true" {:field "colors"}))
+        prefer   (link/parse-prefer (:assets state) (:prefer op))
+        ids      (if (= scope-id uuid/zero)
+                   (into [] (remove #(= % uuid/zero)) (keys objects))
+                   (cfh/get-children-ids-with-self objects scope-id))
+        {:keys [shapes report]}
+        (link/link-assets objects ids {:assets (:assets state)
+                                       :colors? colors?
+                                       :typographies? typos?
+                                       :prefer prefer
+                                       :own-file-id (::file-id state)})]
+    (-> state
+        (cond-> (seq shapes)
+          (update :changes pcb/update-shapes (vec (keys shapes))
+                  (fn [shape] (get shapes (:id shape) shape))
+                  {:attrs #{:fills :strokes :content}}))
+        (update :link-reports (fnil conj [])
+                (assoc report :scope (if (= scope-id uuid/zero) "page" (str scope-id)))))))
 
 (defn- color-name?
   [v]
@@ -706,6 +890,7 @@
      (some (fn [op]
              (when (map? op)
                (or (= "component" (some-> (:type op) str str/lower))
+                   (= "linkassets" (some-> (:op op) str str/lower))
                    (contains? op :typography)
                    (color-name? (:fill op))
                    (color-name? (:textColor op))
@@ -716,12 +901,13 @@
 
 (defn start
   "Empty edit state for a page (see `build` for `opts`, plus `:file-id`)."
-  [page-id objects {:keys [fonts media libraries file-id]}]
+  [page-id objects {:keys [fonts media libraries file-id tokens]}]
   {:changes (-> (pcb/empty-changes :mcp page-id)
                 (pcb/with-objects objects))
    :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{}
    :fonts (vec fonts)
    :media (or media {})
+   :tokens (or tokens {})
    ::page-id page-id
    ::file-id file-id
    :libraries (into {} (map (juxt :id identity)) libraries)
@@ -741,6 +927,12 @@
                   (ctl/any-layout? shape) (update :reflow conj id))))
             state
             alive)))
+
+(defn needs-tokens?
+  "True when `ops` apply design tokens, so the caller loads the file's
+  tokens before `build`."
+  [ops]
+  (boolean (when (sequential? ops) (some #(and (map? %) (contains? % :tokens)) ops))))
 
 (defn image-refs
   "Media ids that image fills in `ops` refer to, so the caller can fetch
@@ -779,7 +971,11 @@
                    "update" (op-update state op)
                    "makecomponent" (op-make-component state op)
                    "delete" (op-delete state op)
-                   (error! (str "Unknown op " (pr-str (:op op)) ". Use create, update, delete or makeComponent") {:field "op"}))
+                   "move" (op-move state op)
+                   "linkassets" (op-link-assets state op)
+                   (error! (str "Unknown op " (pr-str (:op op))
+                                ". Use create, update, delete, move, makeComponent or linkAssets")
+                           {:field "op"}))
                  (catch :default cause
                    (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
                                    (assoc (ex-data cause) :index idx)
@@ -976,52 +1172,154 @@
 
 (defn- round [v] (when (number? v) (/ (js/Math.round (* v 100)) 100)))
 
-(defn- fill-color [shape] (some-> shape :fills first :fill-color))
+(defn- num-val
+  "A number from a number or a numeric string (text styles are strings)."
+  [v]
+  (let [n (cond (number? v) v (string? v) (js/parseFloat v))]
+    (when (and (number? n) (js/isFinite n)) (round n))))
+
+(defn- ref-name
+  "Name of the library asset `id` refers to: from `names` (asset id ->
+  {:name}), or a marker when its library could not be read."
+  [names id]
+  (when (some? id)
+    (or (:name (get names id)) "(library asset not available)")))
 
 (defn- fill-image [shape] (some-> shape :fills first :fill-image :id str))
 
-(defn shape-summary
-  "Compact, JSON-friendly description of a shape (x/y relative to its parent)."
-  [objects shape]
-  (let [origin (parent-origin objects (:parent-id shape))
-        {:keys [x y width height]} (:selrect shape)]
+(defn- fill-summary
+  [names shape]
+  (let [fill (some-> shape :fills first)
+        o    (:fill-opacity fill)]
     (d/without-nils
-     {:id (str (:id shape))
-      :name (:name shape)
-      :type (name (:type shape))
-      :x (round (- x (:x origin)))
-      :y (round (- y (:y origin)))
-      :width (round width)
-      :height (round height)
-      :fill (fill-color shape)
-      :image (fill-image shape)
-      :text (when (cfh/text-shape? shape) (txt/content->text (:content shape)))
-      :layout (when (ctl/flex-layout? shape)
-                (d/without-nils
-                 {:type "flex"
-                  :direction (some-> (:layout-flex-dir shape) name)
-                  :gap (:layout-gap shape)
-                  :padding (:layout-padding shape)}))
-      :sizing (let [h (:layout-item-h-sizing shape) v (:layout-item-v-sizing shape)]
-                (when (or h v) (d/without-nils {:h (some-> h name) :v (some-> v name)})))
-      :component (when (:component-root shape) (str (:component-id shape)))
-      :hidden (when (:hidden shape) true)})))
+     {:fill (:fill-color fill)
+      :fillOpacity (when (and (:fill-color fill) (number? o) (< o 1)) (round o))
+      :fillAsset (ref-name names (:fill-color-ref-id fill))})))
+
+(defn- stroke-summary
+  [names shape]
+  (let [strokes (vec (:strokes shape))
+        s       (first strokes)
+        o       (:stroke-opacity s)]
+    (when (string? (:stroke-color s))
+      (d/without-nils
+       {:color (:stroke-color s)
+        :width (round (:stroke-width s))
+        :align (some-> (:stroke-alignment s) name)
+        :opacity (when (and (number? o) (< o 1)) (round o))
+        :asset (ref-name names (:stroke-color-ref-id s))
+        :count (when (> (count strokes) 1) (count strokes))}))))
+
+(defn- radius-summary
+  [shape]
+  (when (#{:rect :frame} (:type shape))
+    (let [rs (mapv #(or (round (get shape %)) 0) [:r1 :r2 :r3 :r4])]
+      (cond
+        (every? zero? rs) nil
+        (apply = rs) (first rs)
+        :else rs))))
+
+(defn- text-style
+  [names node]
+  (d/without-nils
+   {:fontFamily (let [f (:font-family node)] (if (= "sourcesanspro" f) "Source Sans Pro" f))
+    :fontWeight (some-> (:font-weight node) str)
+    :fontStyle (when (= "italic" (some-> (:font-style node) name)) "italic")
+    :fontSize (num-val (:font-size node))
+    :lineHeight (num-val (:line-height node))
+    :letterSpacing (let [v (num-val (:letter-spacing node))] (when (and v (not (zero? v))) v))
+    :textTransform (let [t (some-> (:text-transform node) name)]
+                     (when (and (some? t) (not= "none" t) (not= "" t)) t))
+    :typography (ref-name names (:typography-ref-id node))}))
+
+(defn- text-summary
+  "Color and style of the first span of a text; `mixedStyles` when the
+  other spans differ."
+  [names shape]
+  (let [nodes (txt/node-seq txt/is-text-node? (:content shape))
+        node  (first nodes)
+        fill  (first (:fills node))
+        style #(-> (select-keys % [:font-id :font-variant-id :font-size :line-height :letter-spacing
+                                   :text-transform :typography-ref-id])
+                   (assoc :color (some-> % :fills first :fill-color)))]
+    (when node
+      (d/without-nils
+       {:textColor (:fill-color fill)
+        :textColorAsset (ref-name names (:fill-color-ref-id fill))
+        :textStyle (text-style names node)
+        :mixedStyles (when (some #(not= (style %) (style node)) (rest nodes)) true)}))))
+
+(defn shape-summary
+  "Compact, JSON-friendly description of a shape (x/y relative to its
+  parent). `names` (asset id -> {:name}) names the library colors and
+  typographies the shape uses."
+  ([objects shape] (shape-summary objects shape nil))
+  ([objects shape names]
+   (let [origin (parent-origin objects (:parent-id shape))
+         {:keys [x y width height]} (:selrect shape)
+         text?  (cfh/text-shape? shape)
+         o      (:opacity shape)]
+     (merge
+      (d/without-nils
+       {:id (str (:id shape))
+        :name (:name shape)
+        :type (name (:type shape))
+        :x (round (- x (:x origin)))
+        :y (round (- y (:y origin)))
+        :width (round width)
+        :height (round height)})
+      (fill-summary names shape)
+      (d/without-nils
+       {:image (fill-image shape)
+        :stroke (stroke-summary names shape)
+        :radius (radius-summary shape)
+        :opacity (when (and (number? o) (< o 1)) (round o))
+        :text (when text? (txt/content->text (:content shape)))})
+      (when text? (text-summary names shape))
+      (d/without-nils
+       {:layout (when (ctl/flex-layout? shape)
+                  (d/without-nils
+                   {:type "flex"
+                    :direction (some-> (:layout-flex-dir shape) name)
+                    :gap (:layout-gap shape)
+                    :padding (:layout-padding shape)}))
+        :sizing (let [h (:layout-item-h-sizing shape) v (:layout-item-v-sizing shape)]
+                  (when (or h v) (d/without-nils {:h (some-> h name) :v (some-> v name)})))
+        :component (when (:component-root shape) (str (:component-id shape)))
+        :tokens (some->> (:applied-tokens shape) not-empty (into {} (map (fn [[k v]] [(name k) v]))))
+        :hidden (when (:hidden shape) true)})))))
 
 (defn tree
   "Nested summary of `root-id`'s subtree, at most `max-depth` levels deep.
   Children are listed like Penpot's layers panel (top layer first), which in
   flex boards is also their visual order."
-  [objects root-id max-depth]
-  (letfn [(walk [id depth]
-            (let [shape (get objects id)]
-              (when shape
-                (cond-> (if (= id uuid/zero)
-                          {:id (str uuid/zero) :type "root"}
-                          (shape-summary objects shape))
-                  (seq (:shapes shape))
-                  (assoc :children
-                         (if (< depth max-depth)
-                           ;; layers panel order (top layer first) = visual order in flex boards
-                           (into [] (keep #(walk % (inc depth))) (rseq (vec (:shapes shape))))
-                           (str (count (:shapes shape)) " children (increase depth to see them)")))))))]
-    (walk root-id 0)))
+  ([objects root-id max-depth] (tree objects root-id max-depth nil))
+  ([objects root-id max-depth names]
+   (letfn [(walk [id depth]
+             (let [shape (get objects id)]
+               (when shape
+                 (cond-> (if (= id uuid/zero)
+                           {:id (str uuid/zero) :type "root"}
+                           (shape-summary objects shape names))
+                   (seq (:shapes shape))
+                   (assoc :children
+                          (if (< depth max-depth)
+                            ;; layers panel order (top layer first) = visual order in flex boards
+                            (into [] (keep #(walk % (inc depth))) (rseq (vec (:shapes shape))))
+                            (str (count (:shapes shape)) " children (increase depth to see them)")))))))]
+     (walk root-id 0))))
+
+(defn ref-file-ids
+  "Ids of the files that library refs (colors, typographies) of `shapes`
+  point to, to name them in summaries."
+  [shapes]
+  (into #{}
+        (comp (mapcat (fn [shape]
+                        (concat (map :fill-color-ref-file (:fills shape))
+                                (map :stroke-color-ref-file (:strokes shape))
+                                (when (cfh/text-shape? shape)
+                                  (mapcat (fn [node] (cons (:typography-ref-file node)
+                                                           (map :fill-color-ref-file (:fills node))))
+                                          (tree-seq map? :children (:content shape)))))))
+              (remove nil?))
+        shapes))

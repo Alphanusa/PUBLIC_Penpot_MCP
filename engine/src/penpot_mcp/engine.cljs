@@ -27,6 +27,7 @@
    [app.common.data :as d]
    [app.common.files.changes :as cfc]
    [app.common.files.changes-builder :as pcb]
+   [app.common.files.tokens :as cfo]
    [app.common.fonts :as cfnt]
    ;; Required for side effects: transit read handlers and deftype impls the
    ;; RPC responses are decoded into.
@@ -51,7 +52,9 @@
    [penpot-mcp.fonts :as fonts]
    [penpot-mcp.library :as library]
    [penpot-mcp.media :as media]
+   [penpot-mcp.move :as move]
    [penpot-mcp.pages :as pages]
+   [penpot-mcp.tokens :as tokens]
    [penpot-mcp.util :as u]
    [promesa.core :as p]))
 
@@ -523,14 +526,17 @@
 
 (defn- edit-result
   [state]
-  (let [objects (edit/objects state)]
-    {:changes (count (:redo-changes (:changes state)))
-     :created (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state))
-     :createdIds (mapv str (:created state))
-     :deleted (mapv str (:deleted state))
-     :components (some->> (:components state) seq (mapv str))
-     :shapes (into [] (keep #(some->> (get objects %) (edit/shape-summary objects)))
-                   (concat (:created state) (remove (set (:created state)) (:moved state))))}))
+  (let [objects (edit/objects state)
+        names   (library/asset-names (:assets state))]
+    (cond-> {:changes (count (:redo-changes (:changes state)))
+             :created (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state))
+             :createdIds (mapv str (:created state))
+             :deleted (mapv str (:deleted state))
+             :components (some->> (:components state) seq (mapv str))
+             :shapes (into []
+                           (keep (fn [id] (some-> (get objects id) (as-> s (edit/shape-summary objects s names)))))
+                           (distinct (concat (:created state) (:relocated state) (:moved state))))}
+      (seq (:link-reports state)) (assoc :linkAssets (vec (:link-reports state))))))
 
 (defn- ops->clj [ops] (js->clj ops :keywordize-keys true))
 
@@ -573,6 +579,8 @@
                                      (rpc ctx :get-file {:id id}))))
                       (p/all))))))
 
+(declare tokens-source-data!)
+
 (defn apply-ops
   "JS entry. Applies `ops` to a page of a Penpot file and saves them.
 
@@ -586,12 +594,16 @@
       (p/let [[file variants] (p/all [(rpc ctx :get-file {:id file-id})
                                       (font-variants! ctx file-id)])
               linked  (if (edit/needs-libraries? ops) (linked-libraries! ctx file-id) [])
+              toks    (if (edit/needs-tokens? ops)
+                        (p/fmap (fn [src] (tokens/active-tokens (:data file) src)) (tokens-source-data! ctx file))
+                        {})
               page-id (or (some-> (.-pageId opts) ->uuid) (first-page-id file))
               page    (or (get-in file [:data :pages-index page-id])
                           (throw (ex-info (str "Page " page-id " not found in file " file-id) {})))
               state   (edit-objects! ctx page-id (:objects page) ops variants
                                      {:libraries (into [(own-library file)] linked)
-                                      :file-id (:id file)})
+                                      :file-id (:id file)
+                                      :tokens toks})
               result  (save-changes! ctx file (:redo-changes (:changes state)) (.-dryRun opts)
                                      (assoc (edit-result state) :pageId (str page-id)))]
         (->js result)))))
@@ -612,10 +624,12 @@
           ctx     {:images (js-images (some-> opts .-images))
                    :gfonts-direct? (boolean (some-> opts .-gfonts))}
           file-id (uuid/next)
-          libs    (vec (some-> opts .-libraries))]
+          libs    (vec (some-> opts .-libraries))
+          toks    (when-let [f (some-> opts .-tokensFile)] (tokens/active-tokens (:data f) (:data f)))]
     (->> (edit-objects! ctx page-id objects ops []
                         {:libraries (into [{:id file-id :name "Offline" :data {} :local? true}] libs)
-                         :file-id file-id})
+                         :file-id file-id
+                         :tokens toks})
          (p/mcat (fn [state]
                    (let [objects (edit/objects state)
                          target  (let [r (some-> opts .-renderRef)]
@@ -631,10 +645,28 @@
                                                                      [(str id) (select-keys shape [:type :name :fills :strokes :content
                                                                                                    :parent-id :shapes :component-id
                                                                                                    :component-file :component-root
-                                                                                                   :shape-ref :touched :selrect])]))
+                                                                                                   :shape-ref :touched :selrect
+                                                                                                   :applied-tokens :layout-gap
+                                                                                                   :layout-padding :r1 :opacity])]))
                                                               (dissoc objects uuid/zero)))
                                         (->js)
                                         (doto (unchecked-set "png" png)))))))))))))
+
+(defn- ref-names!
+  "Asset id -> {:name …} for the library refs of `shapes`, read from the
+  files the refs point to (files that can't be read are skipped: their
+  assets are shown as not available)."
+  [ctx shapes]
+  (let [file-ids (edit/ref-file-ids shapes)]
+    (if (empty? file-ids)
+      (p/resolved {})
+      (->> file-ids
+           (map (fn [id]
+                  (->> (rpc ctx :get-file {:id id})
+                       (p/fmap (fn [f] {:id (:id f) :name (:name f) :data (:data f)}))
+                       (p/merr (fn [_] (p/resolved nil))))))
+           (p/all)
+           (p/fmap #(library/asset-names (library/index (remove nil? %))))))))
 
 (defn page-summary
   "JS entry. Compact tree of a page for the AI.
@@ -645,14 +677,14 @@
    #(let [ctx     (->ctx opts)
           file-id (->uuid (.-fileId opts))
           page-id (some-> (.-pageId opts) ->uuid)]
-    (->> (rpc ctx :get-page (cond-> {:file-id file-id}
-                              page-id (assoc :page-id page-id)))
-         (p/fmap (fn [page]
-                   (let [objects (:objects page)
-                         root    (or (some-> (.-rootId opts) ->uuid) uuid/zero)]
-                     (->js {:pageId (str (:id page))
-                            :pageName (:name page)
-                            :tree (edit/tree objects root (or (.-depth opts) 4))}))))))))
+      (p/let [page  (rpc ctx :get-page (cond-> {:file-id file-id}
+                                         page-id (assoc :page-id page-id)))
+              names (ref-names! ctx (vals (:objects page)))]
+        (let [objects (:objects page)
+              root    (or (some-> (.-rootId opts) ->uuid) uuid/zero)]
+          (->js {:pageId (str (:id page))
+                 :pageName (:name page)
+                 :tree (edit/tree objects root (or (.-depth opts) 4) names)}))))))
 
 ;; --- projects, files and pages
 
@@ -1001,7 +1033,307 @@
                                       :library (first (library/describe [(assoc (own-library file) :data data)] nil 200))})]
          (->js result))))))
 
+;; --- moving and copying shapes between pages and files
+
+(defn- file-lib [file] {:id (:id file) :name (:name file) :data (:data file)})
+
+(defn- by-id [files] (into {} (map (juxt :id identity)) files))
+
+(defn- shape-summaries
+  [objects ids names]
+  (into [] (keep (fn [id] (some-> (get objects id) (as-> s (edit/shape-summary objects s names))))) ids))
+
+(defn- move-shapes*
+  "move_shapes on loaded files. `env`: {:ctx, :source and :target files
+  (:id :name :data), :linked (the target's linked libraries), :src-linked
+  (the source's), :variants (team fonts), :clone (media id -> promise of
+  the id of its copy in the target file), :dry-run?}. `req`: {:page-id
+  :to-page :ids :mode :x :y}. Resolves to {:file (the file to save)
+  :changes :result}."
+  [{:keys [ctx source target linked src-linked variants clone dry-run?]} req]
+  (let [plan    (move/plan (assoc req :source (file-lib source) :target (file-lib target)))
+        src     (:src-page plan)
+        dst     (:dst-page plan)
+        base    {:mode (:mode plan)
+                 :fileId (str (:id source))
+                 :fromPageId (str (:id src))
+                 :toFileId (str (:id target))
+                 :toPageId (str (:id dst))
+                 :toPageName (:name dst)}
+        fonts   (fonts/team-fonts variants)]
+    (if (= "move" (:mode plan))
+      (let [libs  (into [(own-library source)] src-linked)
+            state (edit/start (:id src) (:objects src) {:fonts fonts :libraries libs :file-id (:id source)})
+            {:keys [changes src-state objects report]} (move/build-move (:id source) (:data source) plan state)]
+        (p/let [src-state (if (seq (:reflow src-state)) (layout! ctx src-state variants) (p/resolved src-state))]
+          {:file source
+           :changes (into (vec changes) (:redo-changes (:changes src-state)))
+           :result (merge base report
+                          {:ids (into {} (map (fn [id] [(str id) (str id)])) (:ids plan))
+                           :shapes (shape-summaries objects (:ids plan)
+                                                    (library/asset-names (library/index libs)))})}))
+      (let [objects (:objects src)
+            needed  (if (:same-file? plan) #{} (move/media-ids objects (:ids plan)))
+            present (if (:same-file? plan) #{} (move/used-media (:data target)))
+            missing (vec (remove present needed))]
+        (p/let [pairs (if dry-run?
+                        (p/resolved [])
+                        (p/all (map (fn [mid] (p/fmap (fn [new-id] [mid new-id]) (clone mid))) missing)))
+                libs  (into [(own-library target)] linked)
+                state (p/do (edit/start (:id dst) (:objects dst) {:fonts fonts :libraries libs :file-id (:id target)}))
+                built (p/do (move/build-copy plan {:source (file-lib source)
+                                                   :target (file-lib target)
+                                                   :libraries (by-id libs)
+                                                   :src-libs (by-id (into [(own-library source)] src-linked))
+                                                   :media (into {} pairs)}
+                                             state))
+                state (layout! ctx (:state built) variants)]
+          (let [objects' (edit/objects state)]
+            {:file target
+             :changes (:redo-changes (:changes state))
+             :result (merge base (:report built)
+                            {:ids (into {} (map (fn [[o n]] [(str o) (str n)])) (:ids-map built))
+                             :shapes (shape-summaries objects' (:top-ids built)
+                                                      (library/asset-names (library/index libs)))}
+                            (when (seq needed)
+                              {:media (d/without-nils
+                                       {:cloned (when-not dry-run? (count missing))
+                                        :toClone (when dry-run? (count missing))
+                                        :reused (count (filter present needed))})}))}))))))
+
+(defn- same-team!
+  [ctx file-id to-file-id]
+  (p/let [[a b] (p/all [(rpc ctx :get-team {:file-id file-id}) (rpc ctx :get-team {:file-id to-file-id})])]
+    (when (not= (:id a) (:id b))
+      (throw (ex-info "toFileId must be a file of the same team (fonts, images and libraries belong to a team)"
+                      {:type :invalid-op})))))
+
+(defn move-shapes
+  "JS entry. Moves shapes (usually boards, with their children) to another
+  page of the same file, or copies them to a page of the same or another
+  file of the team, in one update-file (see `penpot-mcp.move`).
+
+  opts: {baseUri, token, fileId, pageId?, ids, toPageId (id or name),
+         toFileId?, mode: 'move'|'copy', x?, y?, dryRun?}
+  Resolves to {mode, ids: {old: new}, shapes, …report, changes, revn, saved}."
+  [^js opts]
+  (guard
+   #(let [ctx        (->ctx opts)
+          file-id    (->uuid (.-fileId opts))
+          to-file-id (or (some-> (.-toFileId opts) ->uuid) file-id)
+          same-file? (= file-id to-file-id)
+          dry-run?   (boolean (.-dryRun opts))]
+      (reset-on-error
+       (p/let [_          (ensure-module!)
+               [file variants] (p/all [(rpc ctx :get-file {:id file-id}) (font-variants! ctx to-file-id)])
+               target     (if same-file? file (rpc ctx :get-file {:id to-file-id}))
+               _          (when-not same-file? (same-team! ctx file-id to-file-id))
+               linked     (linked-libraries! ctx to-file-id)
+               src-linked (if same-file? linked (linked-libraries! ctx file-id))
+               {:keys [file changes result]}
+               (move-shapes* {:ctx ctx :source file :target target :linked linked :src-linked src-linked
+                              :variants variants :dry-run? dry-run?
+                              :clone (fn [mid]
+                                       (->> (rpc ctx :clone-file-media-object {:file-id to-file-id :id mid :is-local true})
+                                            (p/fmap :id)
+                                            (p/merr (fn [cause]
+                                                      (p/rejected (ex-info (str "Could not copy image " mid " to the target file: "
+                                                                                (ex-message cause))
+                                                                           {:type :invalid-op}))))))}
+                             {:page-id (.-pageId opts)
+                              :to-page (.-toPageId opts)
+                              :ids (js->clj (.-ids opts))
+                              :mode (.-mode opts)
+                              :x (.-x opts)
+                              :y (.-y opts)})
+               saved      (save-changes! ctx file changes dry-run? (assoc result :changes (count changes)))]
+         (->js saved))))))
+
+;; --- design tokens
+
+(defn- tokens-source-data!
+  "Data of the file the tokens of `file` come from: itself, or the library
+  set as its tokens source."
+  [ctx file]
+  (let [src (cfo/get-tokens-source (:data file))]
+    (if (or (nil? src) (= src (:id file)))
+      (p/resolved (:data file))
+      (p/fmap :data (rpc ctx :get-file {:id src})))))
+
+(defn get-tokens
+  "JS entry. Themes, sets and tokens of a file (with what each token value
+  resolves to).
+
+  opts: {baseUri, token, fileId, set?, type?, search?, limit=200}"
+  [^js opts]
+  (guard
+   #(let [ctx (->ctx opts)]
+      (p/let [file   (rpc ctx :get-file {:id (->uuid (.-fileId opts))})
+              source (tokens-source-data! ctx file)]
+        (let [src (cfo/get-tokens-source (:data file))]
+          (->js (cond-> (tokens/describe (:data file) source {:set (.-set opts)
+                                                              :type (.-type opts)
+                                                              :search (.-search opts)
+                                                              :limit (.-limit opts)})
+                  (and src (not= src (:id file)))
+                  (assoc :tokensSource {:fileId (str src) :editable false}))))))))
+
+(defn- propagate-tokens!
+  "Changes that apply again the tokens whose value changed (an edit, a theme
+  or set switch) to the shapes of `file` using them, page by page, with the
+  layout pass — like the Tokens panel does. `before`/`after`: the file data
+  around the token changes. Resolves to {:changes [...] :shapes n}."
+  [ctx file before after variants]
+  (let [old     (tokens/active-tokens before before)
+        new     (tokens/active-tokens after after)
+        changed (tokens/changed-tokens old new)]
+    (if (empty? changed)
+      (p/resolved {:changes [] :shapes 0})
+      (reduce (fn [prev page-id]
+                (p/mcat (fn [acc]
+                          (let [objects (get-in after [:pages-index page-id :objects])
+                                ops     (tokens/propagation-ops objects new changed)]
+                            (if (empty? ops)
+                              (p/resolved acc)
+                              (p/fmap (fn [state]
+                                        (-> acc
+                                            (update :changes into (:redo-changes (:changes state)))
+                                            (update :shapes + (count ops))))
+                                      (edit-objects! ctx page-id objects ops variants
+                                                     {:libraries [(assoc (own-library file) :data after)]
+                                                      :file-id (:id file)
+                                                      :tokens new})))))
+                        prev))
+              (p/resolved {:changes [] :shapes 0})
+              (:pages after)))))
+
+(defn edit-tokens
+  "JS entry. Adds, updates and deletes token sets, themes and tokens of a
+  file, and activates themes and sets, saved in one update-file. Shapes
+  using a token whose value changed are updated too.
+
+  opts: {baseUri, token, fileId, ops, dryRun?}
+  Resolves to {changes, created, shapesUpdated, themes, sets, revn, saved}."
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))]
+      (reset-on-error
+       (p/let [[file variants] (p/all [(rpc ctx :get-file {:id file-id}) (font-variants! ctx file-id)])
+               {:keys [changes data created]} (p/do (tokens/build-ops (:data file) (ops->clj (.-ops opts))))
+               spread (propagate-tokens! ctx file (:data file) data variants)
+               all    (into (vec changes) (:changes spread))
+               saved  (save-changes! ctx file all (.-dryRun opts)
+                                     (merge {:changes (count all) :created created :shapesUpdated (:shapes spread)}
+                                            (select-keys (tokens/describe data data {:limit 0}) [:themes :sets])))]
+         (->js saved))))))
+
 ;; --- offline helpers for tests
+
+(defn- file-pages-js
+  "Pages of in-memory file `data` for tests: [{id, name, objects}]."
+  [data]
+  (->js (vec (for [page-id (:pages data)
+                   :let [page (get-in data [:pages-index page-id])]]
+               {:id page-id
+                :name (:name page)
+                :flows (vec (vals (:flows page)))
+                :objects (into {}
+                               (map (fn [[id shape]]
+                                      [(str id) (select-keys shape [:type :name :parent-id :frame-id :shapes :fills :strokes
+                                                                    :content :selrect :layout :layout-flex-dir
+                                                                    :component-id :component-file :component-root
+                                                                    :main-instance :shape-ref :touched :interactions
+                                                                    :applied-tokens])]))
+                               (:objects page))}))))
+
+(defn move-shapes-offline
+  "JS entry (tests). move_shapes on in-memory files from libraryOffline.
+
+  opts: {ids, toPage, pageId?, mode, x?, y?, target? (another in-memory
+  file), media? ({old media id: new id}, for copies to another file),
+  images? (bytes by media id, to measure and render)}
+  Resolves to {file (the changed file), result, changes, valid, pages,
+  components}."
+  [^js source ^js opts]
+  (guard
+   #(let [target  (or (some-> opts .-target) source)
+          ctx     {:images (js-images (some-> opts .-images))}
+          mapping (into {} (map (fn [[k v]] [(uuid/parse k) (uuid/parse v)]))
+                        (js->clj (or (some-> opts .-media) #js {})))]
+      (->> (ensure-module!)
+           (p/mcat (fn [_]
+                     (move-shapes* {:ctx ctx :source source :target target :linked [] :src-linked []
+                                    :variants [] :dry-run? false
+                                    :clone (fn [mid] (p/resolved (get mapping mid (uuid/next))))}
+                                   {:page-id (some-> opts .-pageId)
+                                    :to-page (.-toPage opts)
+                                    :ids (js->clj (.-ids opts))
+                                    :mode (.-mode opts)
+                                    :x (.-x opts)
+                                    :y (.-y opts)})))
+           (p/fmap (fn [{:keys [file changes result]}]
+                     ;; verify? true: the same schema checks as the backend
+                     (let [data (cfc/process-changes (:data file) (vec changes) true)]
+                       #js {:file (assoc file :data data)
+                            :result (->js result)
+                            :changes (->js (mapv (fn [c] (select-keys c [:type :id :page-id])) changes))
+                            :valid true
+                            :pages (file-pages-js data)
+                            :components (->js (into {}
+                                                    (map (fn [[id c]]
+                                                           [(str id) (d/without-nils
+                                                                      {:name (library/full-name c)
+                                                                       :mainInstanceId (:main-instance-id c)
+                                                                       :mainInstancePage (:main-instance-page c)
+                                                                       :deleted (:deleted c)})]))
+                                                    (:components data)))})))))))
+
+(defn render-file-offline
+  "JS entry (tests). Renders shape `objectId` of an in-memory file (any page)
+  to PNG bytes. opts: {images?, scale?}"
+  [^js file object-id ^js opts]
+  (guard
+   #(let [id   (uuid/parse object-id)
+          data (:data file)
+          page (d/seek (fn [page] (contains? (:objects page) id))
+                       (map (fn [pid] (get-in data [:pages-index pid])) (:pages data)))
+          ctx  {:images (js-images (some-> opts .-images))}]
+      (->> (ensure-module!)
+           (p/mcat (fn [_] (render-scene! ctx (:objects page) [id] {:scale (or (some-> opts .-scale) 1) :format :png :variants []})))
+           (p/fmap first)))))
+
+(defn tokens-offline
+  "JS entry (tests). edit_tokens `ops` on an in-memory file (with the
+  propagation to shapes), then `pageOps` (edit ops, may apply tokens) on its
+  first page, then get_tokens with `query` ({set, type, search}). Resolves to
+  {file, changes, created, shapesUpdated, tokens, pages}."
+  ([file ops] (tokens-offline file ops nil nil))
+  ([file ops query] (tokens-offline file ops query nil))
+  ([^js file ^js ops ^js query ^js page-ops]
+   (guard
+    #(p/let [_      (ensure-module!)
+             {:keys [changes data created]} (p/do (tokens/build-ops (:data file) (ops->clj ops)))
+             spread (propagate-tokens! {} file (:data file) data [])
+             all    (into (vec changes) (:changes spread))
+             ;; verify? true: the same schema checks as the backend
+             data   (p/do (cfc/process-changes (:data file) all true))
+             page-id (first (:pages data))
+             state  (if (seq page-ops)
+                      (edit-objects! {} page-id (get-in data [:pages-index page-id :objects]) (ops->clj page-ops) []
+                                     {:libraries [(assoc (own-library file) :data data)]
+                                      :file-id (:id file)
+                                      :tokens (tokens/active-tokens data data)})
+                      (p/resolved nil))
+             data   (p/do (if state (cfc/process-changes data (vec (:redo-changes (:changes state))) true) data))]
+       (let [q (js->clj (or query #js {}) :keywordize-keys true)]
+         #js {:file (assoc file :data data)
+              :changes (->js (mapv (fn [c] (select-keys c [:type])) all))
+              :created (->js created)
+              :shapesUpdated (:shapes spread)
+              :pageCreated (->js (some->> state :refs (into {} (map (fn [[ref id]] [ref (str id)])))))
+              :tokens (->js (tokens/describe data data q))
+              :pages (file-pages-js data)})))))
 
 (defn pages-offline
   "JS entry (tests). Applies page `ops` to an in-memory file with `pages`
@@ -1026,26 +1358,37 @@
   "JS entry (tests). Builds an in-memory library file: `libraryOps` (colors,
   typographies) first, then `ops` (edit ops on its page, e.g. boards using
   those assets, then makeComponent). Resolves to {library (opaque, for
-  applyOpsOffline `libraries` and editLibraryOffline), created, summary}."
-  [^js ops ^js library-ops]
-  (guard
-   #(let [file-id (uuid/next)
-          page    (ctp/make-empty-page {:id (uuid/next) :name "Components"})
-          data0   {:id file-id :pages [(:id page)] :pages-index {(:id page) page}
-                   :components {} :colors {} :typographies {}}
-          lib     (if (seq library-ops)
-                    (library/build-ops data0 [] (ops->clj library-ops))
-                    {:changes []})
-          ;; verify? true: the same schema checks as the backend
-          data1   (cfc/process-changes data0 (vec (:changes lib)) true)]
-      (p/let [state (edit-objects! {} (:id page) (get-in data1 [:pages-index (:id page) :objects]) (ops->clj ops) []
-                                   {:libraries [{:id file-id :name "Library" :data data1 :local? true}]
-                                    :file-id file-id})
-              data2 (cfc/process-changes data1 (vec (:redo-changes (:changes state))) true)
-              file  {:id file-id :name "Library" :data data2}]
-        #js {:library file
-             :created (->js (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state)))
-             :summary (->js (first (library/describe [file] nil 100)))}))))
+  applyOpsOffline `libraries` and editLibraryOffline), created, summary}.
+  opts: {name?, pages?: names of more (empty) pages, images?: bytes by media
+  id for image fills, linkAssets?: the result of linkAssets ops}."
+  ([ops library-ops] (library-offline ops library-ops nil))
+  ([^js ops ^js library-ops ^js opts]
+   (guard
+    #(let [file-id (uuid/next)
+           fname   (or (some-> opts .-name) "Library")
+           page    (ctp/make-empty-page {:id (uuid/next) :name "Components"})
+           extra   (mapv (fn [n] (ctp/make-empty-page {:id (uuid/next) :name n}))
+                         (js->clj (or (some-> opts .-pages) #js [])))
+           data0   {:id file-id
+                    :pages (into [(:id page)] (map :id) extra)
+                    :pages-index (into {(:id page) page} (map (juxt :id identity)) extra)
+                    :components {} :colors {} :typographies {}}
+           lib     (if (seq library-ops)
+                     (library/build-ops data0 [] (ops->clj library-ops))
+                     {:changes []})
+           ;; verify? true: the same schema checks as the backend
+           data1   (cfc/process-changes data0 (vec (:changes lib)) true)]
+       (p/let [state (edit-objects! {:images (js-images (some-> opts .-images))}
+                                    (:id page) (get-in data1 [:pages-index (:id page) :objects]) (ops->clj ops) []
+                                    {:libraries [{:id file-id :name fname :data data1 :local? true}]
+                                     :file-id file-id})
+               data2 (cfc/process-changes data1 (vec (:redo-changes (:changes state))) true)
+               file  {:id file-id :name fname :data data2}]
+         #js {:library file
+              :created (->js (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state)))
+              :linkAssets (->js (:link-reports state))
+              :pages (file-pages-js data2)
+              :summary (->js (first (library/describe [file] nil 100)))})))))
 
 (defn edit-library-offline
   "JS entry (tests). edit_library on an in-memory file from libraryOffline or

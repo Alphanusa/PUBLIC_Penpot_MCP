@@ -65,7 +65,23 @@ await engine.editLibrary({ ...ctx, fileId, ops: [
   { op: "add", type: "typography", name: "Heading / H1", fontFamily: "IBM Plex Sans", fontWeight: 600, fontSize: 32 },
 ]});
 // in applyOps: { op: "create", type: "component", component: "Buttons / Primary", texts: { Label: "Save" } },
-//              fill: "Brand / Primary", typography: "Heading / H1", { op: "makeComponent", id: boardRef }
+//              fill: "Brand / Primary", typography: "Heading / H1", { op: "makeComponent", id: boardRef },
+//              { op: "linkAssets", scope: "page", typographies: true, prefer: { "#ffffff": "Surface" } }
+//              { op: "move", id: shapeId, parent: boardId, index: 0 }
+
+// boards to another page (same ids), or copies to a page of another file of the team
+await engine.moveShapes({ ...ctx, fileId, ids: [boardId], toPageId: "Archive", mode: "move" });
+await engine.moveShapes({ ...ctx, fileId, ids: [boardId], toFileId, toPageId: "Components", mode: "copy", x: 0, y: 0 });
+
+// design tokens
+await engine.getTokens({ ...ctx, fileId, type: "color" });               // {themes, sets, tokens (value, resolved)}
+await engine.editTokens({ ...ctx, fileId, ops: [
+  { op: "addSet", name: "core", active: true },
+  { op: "addToken", set: "core", type: "color", name: "color.primary", value: "#0066ff" },
+  { op: "addToken", set: "core", type: "spacing", name: "space.lg", value: "{space.md} * 2" },
+  { op: "addTheme", group: "Mode", name: "Light", sets: ["core"], active: true },
+]});
+// in applyOps: { op: "create", type: "frame", layout: {}, tokens: { fill: "color.primary", padding: "space.lg" } }
 
 // fonts and images
 await engine.uploadFont({ ...ctx, teamId, data: ttfBytes, mimeType: "font/ttf", family: "Brand Sans", weight: 700, style: "normal" });
@@ -108,6 +124,17 @@ link/unlink/sync, library colors and typographies (used by name, linked), compon
 with overrides (Penpot's `make-component-instance`), boards made components
 (`generate-add-component`), and library color/typography edits synced to the shapes that
 use them (`generate-sync-file-changes`, then texts re-measured and layouts reflowed).
+Shapes are moved and reordered with Penpot's `generate-relocate` (the move op). Raw colors
+and text styles are linked to library assets with the same values by
+[`link.cljs`](src/penpot_mcp/link.cljs) (`linkAssets`; ambiguous and unmatched values are
+reported, never guessed). [`move.cljs`](src/penpot_mcp/move.cljs) moves subtrees to another
+page in one update-file (ids kept; main components, flows and guides follow), or copies them
+with `generate-duplicate-changes` like paste — to another file with media cloned
+(`clone-file-media-object`), library refs remapped by name and main components recreated.
+Design tokens ([`tokens.cljs`](src/penpot_mcp/tokens.cljs)) are read and edited with Penpot's
+tokens library and changes (sets, themes, tokens, activation, checked with Penpot's schemas),
+resolved here for references and arithmetic, and applied to shapes by recording
+`applied-tokens` as the Tokens panel does.
 Not yet: grid layout, paths, groups, component swaps, SVG import as editable vectors.
 
 Component copies moved by a layout keep following their main component: like the
@@ -156,6 +183,13 @@ git archive origin/engine-dist dist | tar -x -C engine/
   flex board, library colors on fills/strokes/texts, a typography), checks that copies moved
   by the layout are not marked as overridden, and edit_library updates synced to the shapes
   using them, with the changes checked against Penpot's change schemas. Runs in CI.
+- `test/link-move-tokens.mjs` — offline. linkAssets (linked, ambiguous with `prefer`,
+  unmatched, typographies; library edits then follow), the summaries (strokes, radius, text
+  styles, asset names), the move op (reorder in a flex row, re-parent, page root), move_shapes
+  (to another page keeping ids, layouts, images and the component; copied to another file with
+  media, refs remapped or unlinked, the component recreated and its copy relinked, rendering
+  like the original), design tokens (sets, themes, activation, resolved values, validation
+  errors) and tokens applied to shapes. Runs in CI.
 - `test/live.mjs` — against a real Penpot. Needs `PENPOT_URL` and `PENPOT_TOKEN`
   (access token of a **test** account); optional `FILE_ID`, `PAGE_ID`, `OBJECT_ID`,
   otherwise it renders the first board of the first file it finds.

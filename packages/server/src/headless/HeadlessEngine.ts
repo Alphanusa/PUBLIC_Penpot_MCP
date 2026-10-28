@@ -64,6 +64,23 @@ export interface PenpotEngineModule {
     ): Promise<any>;
     libraryAssets(opts: PenpotContext & { fileId: string; search?: string; limit?: number }): Promise<any>;
     editLibrary(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
+    moveShapes(
+        opts: PenpotContext & {
+            fileId: string;
+            pageId?: string;
+            ids: string[];
+            toPageId: string;
+            toFileId?: string;
+            mode: "move" | "copy";
+            x?: number;
+            y?: number;
+            dryRun?: boolean;
+        }
+    ): Promise<any>;
+    getTokens(
+        opts: PenpotContext & { fileId: string; set?: string; type?: string; search?: string; limit?: number }
+    ): Promise<any>;
+    editTokens(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
 }
 
 /**

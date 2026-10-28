@@ -26,7 +26,7 @@
 (def fill-props [:color :image :fit :opacity])
 
 (def ^:private geometry-props [:x :y :width :height])
-(def ^:private common-props [:name :opacity :visible :stroke :sizing])
+(def ^:private common-props [:name :opacity :visible :stroke :sizing :tokens])
 (def ^:private box-fill-props [:fill :fillOpacity])
 (def ^:private text-props
   [:text :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
@@ -117,7 +117,8 @@
       "Refs are given on create; update and delete take the shape \"id\" (or the ref, as \"id\")."
 
       (and (= kind :update) (= k :parent))
-      "Moving a shape to another parent is not supported yet: delete it and create it again under the new parent."
+      (str "To move a shape to another parent or reorder it use the move op: "
+           "{\"op\": \"move\", \"id\": …, \"parent\": …, \"index\": …}.")
 
       (layout-prop? k)
       (if (= type :frame)
