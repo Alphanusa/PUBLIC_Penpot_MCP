@@ -1,0 +1,108 @@
+[engine] building render-wasm (export target)
++ setup
++ setup_rust
++ rustup default 1.99.0
+info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-01 for version 1.99.0 (b940084d7 2026-09-28)
+info: downloading 3 components
+info: default toolchain set to 1.99.0-x86_64-unknown-linux-gnu
+
+  1.99.0-x86_64-unknown-linux-gnu installed - rustc 1.99.0 (b940084d7 2026-09-28)
+
++ rustup target add wasm32-unknown-emscripten
+info: downloading component rust-std
++ rustup component add clippy rustfmt --toolchain 1.99.0
+info: downloading 2 components
++ pnpm install
+? Verifying lockfile against supply-chain policies (29 entries)...
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/../.pnpm-store/v11
+  Virtual store is at:             node_modules/.pnpm
+✓ Lockfile passes supply-chain policies (29 entries in 603ms)
+Lockfile is up to date, resolution step is skipped
+Packages: +4
+++++
+Progress: resolved 4, reused 0, downloaded 4, added 4, done
+.../esbuild@0.28.2/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.28.2/node_modules/esbuild postinstall: Done
+
+devDependencies:
++ @types/node 26.3.0
++ esbuild 0.28.2
+
+Done in 706ms using pnpm v12.14.0
++ build
++ set -o pipefail
++ cargo build --message-format=json-render-diagnostics --profile size
++ node ./scripts/cargo-build.cjs target/export/build-info.json /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/Cargo.toml
+   Compiling render v0.1.0 (/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm)
+   Compiling macros v0.1.0 (/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/macros)
+    Finished `size` profile [optimized] target(s) in 58.85s
++ copy_target_artifacts
++ case "$RENDER_TARGET" in
++ copy_artifacts ../exporter/resources/wasm
++ local DEST=../exporter/resources/wasm
++ local SRC
+++ jq -r .artifact_dir -- target/export/build-info.json
++ SRC=/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size
++ mkdir -p -- ../exporter/resources/wasm
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.js ../exporter/resources/wasm/render-wasm.js
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.wasm ../exporter/resources/wasm/render-wasm.wasm
++ '[' -f /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/render_wasm.wasm.map ']'
++ local 'WASM_URL=render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ WASM_URL='render-wasm.wasm?version=develop'
++ sed -i 's|render_wasm\.wasm|render-wasm.wasm?version=develop|g' ../exporter/resources/wasm/render-wasm.js
++ '[' export = frontend ']'
++ copy_shared_artifact ../exporter/src/app/wasm/shared.js
++ local DEST=../exporter/src/app/wasm/shared.js
++ local SHARED_FILE
+++ jq -r .shared_file -- target/export/build-info.json
++ SHARED_FILE=/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/build/render-ee22b1ed371cf0e9/out/render_wasm_shared.js
+++ dirname -- ../exporter/src/app/wasm/shared.js
++ mkdir -p -- ../exporter/src/app/wasm
++ cp -- /home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/.penpot/render-wasm/target/export/wasm32-unknown-emscripten/size/build/render-ee22b1ed371cf0e9/out/render_wasm_shared.js ../exporter/src/app/wasm/shared.js
++ '[' -n '' ']'
++ popd
++ release_build_lock
++ [[ 1 == \1 ]]
++ _RENDER_WASM_BUILD_LOCK_HELD=0
++ flock --unlock 9
++ exec
+[engine] building ClojureScript engine
+[:engine] Compiling ...
+[:engine] Build completed. (348 files, 202 compiled, 0 warnings, 42.66s)
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist:
+total 28060
+drwxr-xr-x  4 runner runner     4096 Oct 28 19:28 .
+drwxr-xr-x 10 runner runner     4096 Oct 28 19:28 ..
+-rw-r--r--  1 runner runner       41 Oct 28 19:28 PENPOT_SHA
+-rw-r--r--  1 runner runner  9682073 Oct 28 19:28 engine.js
+-rw-r--r--  1 runner runner 19027385 Oct 28 19:28 engine.js.map
+drwxr-xr-x  2 runner runner     4096 Oct 28 19:28 fonts
+drwxr-xr-x  2 runner runner     4096 Oct 28 19:28 wasm
+
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist/fonts:
+total 832
+drwxr-xr-x 2 runner runner  4096 Oct 28 19:28 .
+drwxr-xr-x 4 runner runner  4096 Oct 28 19:28 ..
+-rw-r--r-- 1 runner runner 66780 Oct 28 19:28 sourcesanspro-black.ttf
+-rw-r--r-- 1 runner runner 66836 Oct 28 19:28 sourcesanspro-blackitalic.ttf
+-rw-r--r-- 1 runner runner 67412 Oct 28 19:28 sourcesanspro-bold.ttf
+-rw-r--r-- 1 runner runner 67468 Oct 28 19:28 sourcesanspro-bolditalic.ttf
+-rw-r--r-- 1 runner runner 67884 Oct 28 19:28 sourcesanspro-extralight.ttf
+-rw-r--r-- 1 runner runner 69944 Oct 28 19:28 sourcesanspro-extralightitalic.ttf
+-rw-r--r-- 1 runner runner 67036 Oct 28 19:28 sourcesanspro-italic.ttf
+-rw-r--r-- 1 runner runner 67896 Oct 28 19:28 sourcesanspro-light.ttf
+-rw-r--r-- 1 runner runner 69688 Oct 28 19:28 sourcesanspro-lightitalic.ttf
+-rw-r--r-- 1 runner runner 68640 Oct 28 19:28 sourcesanspro-regular.ttf
+-rw-r--r-- 1 runner runner 68016 Oct 28 19:28 sourcesanspro-semibold.ttf
+-rw-r--r-- 1 runner runner 67220 Oct 28 19:28 sourcesanspro-semibolditalic.ttf
+
+/home/runner/work/PUBLIC_Penpot_MCP/PUBLIC_Penpot_MCP/engine/dist/wasm:
+total 10184
+drwxr-xr-x 2 runner runner     4096 Oct 28 19:28 .
+drwxr-xr-x 4 runner runner     4096 Oct 28 19:28 ..
+-rw-r--r-- 1 runner runner   112080 Oct 28 19:28 render-wasm.js
+-rwxr-xr-x 1 runner runner 10303711 Oct 28 19:28 render-wasm.wasm
