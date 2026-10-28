@@ -28,7 +28,9 @@ export interface PenpotEngineModule {
     ): Promise<any>;
     applyOps(opts: PenpotContext & { fileId: string; pageId?: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
     createProject(opts: PenpotContext & { name: string; teamId?: string }): Promise<any>;
-    createFile(opts: PenpotContext & { projectId: string; name: string; pages?: string[] }): Promise<any>;
+    createFile(
+        opts: PenpotContext & { projectId: string; name: string; pages?: string[]; shared?: boolean }
+    ): Promise<any>;
     filePages(opts: PenpotContext & { fileId: string }): Promise<{ id: string; name: string }[]>;
     editPages(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
     listFonts(
@@ -43,6 +45,25 @@ export interface PenpotEngineModule {
             mimeType?: string;
         }
     ): Promise<{ id: string; name: string; width: number; height: number; mtype: string }>;
+    uploadFont(
+        opts: PenpotContext & {
+            teamId?: string;
+            fileId?: string;
+            data: Uint8Array;
+            mimeType: string;
+            family: string;
+            weight: number;
+            style: string;
+        }
+    ): Promise<any>;
+    importLibrary(
+        opts: PenpotContext & { projectId: string; name: string; data: Uint8Array; shared?: boolean; linkTo?: string[] }
+    ): Promise<any>;
+    linkLibrary(
+        opts: PenpotContext & { fileId: string; libraryId: string; unlink?: boolean; sync?: boolean; dryRun?: boolean }
+    ): Promise<any>;
+    libraryAssets(opts: PenpotContext & { fileId: string; search?: string; limit?: number }): Promise<any>;
+    editLibrary(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
 }
 
 /**
