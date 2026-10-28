@@ -14,6 +14,14 @@
                pageSummary     penpot-mcp.engine/page-summary
                applyOps        penpot-mcp.engine/apply-ops
                applyOpsOffline penpot-mcp.engine/apply-ops-offline
+               createProject   penpot-mcp.engine/create-project
+               createFile      penpot-mcp.engine/create-file
+               filePages       penpot-mcp.engine/file-pages
+               editPages       penpot-mcp.engine/edit-pages
+               listFonts       penpot-mcp.engine/list-fonts
+               uploadImage     penpot-mcp.engine/upload-image
+               pagesOffline    penpot-mcp.engine/pages-offline
+               imageInfo       penpot-mcp.engine/image-info
                renderDemo      penpot-mcp.engine/render-demo}}}
 
    ;; Same resolution settings as Penpot's exporter build.

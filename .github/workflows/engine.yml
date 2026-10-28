@@ -99,6 +99,12 @@ jobs:
           set -o pipefail
           node test/edit-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/edit-smoke.log"
 
+      - name: Feature tests (validation, fonts, images, pages)
+        working-directory: engine
+        run: |
+          set -o pipefail
+          node test/features.mjs 2>&1 | tee "$RUNNER_TEMP/features.log"
+
       - name: Upload build
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,7 +124,7 @@ jobs:
         run: |
           OUT="$RUNNER_TEMP/engine-logs"
           rm -rf "$OUT" && mkdir -p "$OUT"
-          for f in build.log smoke.log edit-smoke.log; do
+          for f in build.log smoke.log edit-smoke.log features.log; do
             [[ -f "$RUNNER_TEMP/$f" ]] && tail -n 400 "$RUNNER_TEMP/$f" > "$OUT/$f"
           done
           echo "$JOB_STATUS $SRC_BRANCH@$GITHUB_SHA run $GITHUB_RUN_ID" > "$OUT/STATUS"
