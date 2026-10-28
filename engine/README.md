@@ -82,6 +82,28 @@ await engine.editTokens({ ...ctx, fileId, ops: [
   { op: "addTheme", group: "Mode", name: "Light", sets: ["core"], active: true },
 ]});
 // in applyOps: { op: "create", type: "frame", layout: {}, tokens: { fill: "color.primary", padding: "space.lg" } }
+await engine.getTokens({ ...ctx, fileId, format: "dtcg" });                // {format, json}: W3C DTCG export
+await engine.editTokens({ ...ctx, fileId, ops: [{ op: "import", tokens: dtcgJson, mode: "merge" }] });
+
+// design system ops (applyOps)
+//   { op: "makeVariants", name: "Buttons / Button", variants: [{ id: "primary", properties: { Type: "Primary" } }, …] }
+//   { op: "setVariant", id: mainId, properties: { State: "Hover" } }   { op: "swap", id: copyId, variant: { Type: "Secondary" } }
+//   { op: "detach", id }  { op: "resetOverrides", id }  { op: "annotate", id: mainId, annotation: "…" }
+//   { op: "create", type: "svg", svg: "<svg …>", width: 24, height: 24, color: "#111827" }
+//   { op: "create", type: "path", d: "M0 0 L24 12 L0 24 Z" }  { op: "group", ids }  { op: "boolean", ids, kind: "union" }
+//   fill: { gradient: { angle: 90, stops: ["#3366ff", "#00aa88"] } }, shadow: { y: 4, blur: 12 }, blur: 4,
+//   spans: [{ text: "Hi " }, { text: "there", fontWeight: "700" }], layout: { type: "grid", columns: ["1fr", 240] },
+//   cell: { row: 1, column: 2 }, margin, minWidth, constraints: { h: "leftright" }, rotation: 15,
+//   tokens: { typography: "type.body", shadow: "elevation.1", strokeWidth: "border.thin" },
+//   interactions: [{ trigger: "click", action: "navigate", destination: boardId }], { op: "flow", name, start },
+//   exports: [{ type: "png", scale: 2, suffix: "@2x" }]
+// editing a main updates its copies on every page (result.copiesUpdated)
+
+// checks, previews, history, comments
+await engine.auditDesign({ ...ctx, fileId, pageId, checks: ["contrast", "colors"] });
+await engine.renderShape({ ...ctx, fileId, pageId, objectId, theme: "Mode/Dark" });   // token theme preview
+await engine.fileVersions({ ...ctx, fileId, action: "create", label: "Before redesign" });
+await engine.comments({ ...ctx, fileId, action: "create", shapeId, content: "Why this spacing?" });
 
 // fonts and images
 await engine.uploadFont({ ...ctx, teamId, data: ttfBytes, mimeType: "font/ttf", family: "Brand Sans", weight: 700, style: "normal" });
@@ -134,8 +156,29 @@ with `generate-duplicate-changes` like paste — to another file with media clon
 Design tokens ([`tokens.cljs`](src/penpot_mcp/tokens.cljs)) are read and edited with Penpot's
 tokens library and changes (sets, themes, tokens, activation, checked with Penpot's schemas),
 resolved here for references and arithmetic, and applied to shapes by recording
-`applied-tokens` as the Tokens panel does.
-Not yet: grid layout, paths, groups, component swaps, SVG import as editable vectors.
+`applied-tokens` as the Tokens panel does (colors, dimensions, spacing, sizing, radius,
+opacity, stroke width, rotation, shadow and typography tokens), imported and exported as
+DTCG JSON with Penpot's tokens library.
+
+Design systems: variant sets are built like the editor's "Combine as variants" (the set
+board, `:variant-id` / `:variant-properties` on the components and their mains, names from
+the set), copies are swapped with `generate-component-swap` keeping overrides
+(`generate-keep-touched`), detached and reset with Penpot's library logic, and after every
+edit the copies of changed mains are synced with `generate-sync-file-changes` on every page.
+[`vector.cljs`](src/penpot_mcp/vector.cljs) imports SVG markup with Penpot's
+`create-svg-shapes` (parsed with sax, like tubax), creates paths from SVG path data, groups,
+ungroups and makes boolean shapes (ports of the workspace's group and bool events). Fills
+take gradients and several layers, strokes gradients and dash styles; shadows, layer and
+background blur and blend modes are set like the design tab; texts take spans (rich text)
+and vertical alignment. Grid layouts (tracks, cells, spans) use `common`'s grid helpers
+(`add-grid-column`, `push-into-cell`, `resize-cell-area`, `assign-cells`) and are laid out by
+the same modifiers code as flex; layout item options, constraints and rotation too. Groups
+and booleans are recomputed after geometry changes (`reg-objects`). Deletes use
+`generate-delete-shapes` (components, flows and prototype links follow). Prototype
+interactions are checked with Penpot's interaction schema; flows and export settings are
+plain changes. [`audit.cljs`](src/penpot_mcp/audit.cljs) runs the design checks (WCAG
+contrast with alpha blending over the solid background behind each text, CIE76 color
+distance to library colors, token scales).
 
 Component copies moved by a layout keep following their main component: like the
 workspace, geometry changes that keep a copy's shapes in place relative to its root are
@@ -190,6 +233,14 @@ git archive origin/engine-dist dist | tar -x -C engine/
   media, refs remapped or unlinked, the component recreated and its copy relinked, rendering
   like the original), design tokens (sets, themes, activation, resolved values, validation
   errors) and tokens applied to shapes. Runs in CI.
+- `test/design-system.mjs` — offline. Variant sets (make, add, set/rename/remove
+  properties, errors), annotations, copies (variant switch keeping overrides, swap to another
+  component, detach, reset, copies following an edit of their main on another page), SVG
+  import with tinting, paths, booleans, groups, gradients, shadows, blur, multiple fills,
+  rich text, grid layouts with spans and auto placement, layout item options, constraints,
+  rotation, typography/shadow/stroke/rotation/margin/sizing tokens, theme switch and themed
+  render, DTCG export/import (replace and merge), audit_design findings, prototype
+  interactions, flows, export settings, and editor-like deletes. Runs in CI.
 - `test/live.mjs` — against a real Penpot. Needs `PENPOT_URL` and `PENPOT_TOKEN`
   (access token of a **test** account); optional `FILE_ID`, `PAGE_ID`, `OBJECT_ID`,
   otherwise it renders the first board of the first file it finds.
@@ -200,6 +251,13 @@ git archive origin/engine-dist dist | tar -x -C engine/
   a library file (colors, typography, a component), a design file linked to it using them,
   a library change synced to it, optionally a team font (`FONT_FILE`) and a `.penpot`
   import (`PENPOT_PACKAGE`); renders `test/out/live-library.png`.
+- `test/live-move-tokens.mjs` — against a real Penpot, **creates** a project in a test
+  account: linkAssets, the move op, move_shapes and design tokens.
+- `test/live-design-system.mjs` — against a real Penpot, **creates** a project in a test
+  account: tokens with light/dark themes, a button variant set and an icon from SVG, a grid
+  screen with copies, a swap, effects, rich text and a prototype flow, copies following a
+  main edit, audit_design, light and dark renders, SVG and PDF exports, DTCG export and import
+  into a second file, a version and a comment.
 
 ## Spike results (2026-10-20, Penpot `be2e117`)
 
@@ -218,4 +276,4 @@ Offline render verified visually (fills, corner radius, positions, 2× scale).
 
 1. Live round-trip against the team's Penpot (needs a test account access token).
 2. Per-user credentials (OAuth with Logto) instead of one server-wide token.
-3. More ops: grid layout, groups, paths, component swaps; SVG import as vectors.
+3. Masks, path editing beyond replacing `d`, texts on paths.
