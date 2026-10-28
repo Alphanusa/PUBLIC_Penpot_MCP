@@ -9,17 +9,31 @@ layout and rendering) — packaged as the [engine](engine/README.md).
 | Tool | What it does |
 |---|---|
 | `list_files` | Teams, projects and files the user can edit, with ids (optionally each file's pages) |
-| `get_page_overview` | Compact layer tree: ids, geometry, text, flex layout, sizing |
-| `edit_page` | Create / update / delete boards, rectangles, ellipses, texts and images; color and image fills, strokes, radius, fonts, flex layout, sizing — saved in one `update-file`, live for people who have the file open. Unknown or misplaced properties are rejected, never ignored |
+| `get_page_overview` | Compact layer tree: ids, geometry, fill, stroke, radius, text with its color and style, flex layout, sizing; library colors, typographies and applied tokens by name |
+| `edit_page` | Create / update / move (re-parent, reorder) / delete boards, rectangles, ellipses, texts, images and copies of library components; color, library color and image fills, strokes, radius, fonts and library typographies, design tokens, flex layout, sizing; turn boards into components; link raw colors and text styles to library assets (`linkAssets`) — saved in one `update-file`, live for people who have the file open. Unknown or misplaced properties are rejected, never ignored |
 | `render_shape` | Renders a board with Penpot's renderer and returns it as an image for the AI to check |
 | `create_project` | New project in a team (the account's default team when none is given) |
-| `create_file` | New file in a project, optionally with named pages |
+| `create_file` | New file in a project, optionally with named pages, optionally published as a shared library |
 | `edit_pages` | Add, rename, delete and reorder pages |
 | `list_fonts` | Font families for texts: the team's uploaded fonts, builtin Source Sans Pro, Google Fonts — with their weights |
 | `upload_image` | Adds a PNG/JPEG/GIF/WebP/SVG to a file's media (from a URL, base64, or a local path when the server has file system access) for image fills |
+| `upload_font` | Adds a TTF/OTF/WOFF/WOFF2 font to a team's fonts (family, weight and style read from the file) |
+| `import_library` | Imports a `.penpot` file (UI kit, icon set, design system) into a project as a shared library, optionally linked to files |
+| `link_library` | Links / unlinks a shared library to a file; with `sync`, applies the library's latest changes like accepting "library updates" |
+| `get_library` | Components (with variants and size), colors and typographies a file can use, from its own and its linked libraries |
+| `edit_library` | Adds / updates / deletes the colors and typographies of a file's own library; shapes using an updated asset follow it |
+| `move_shapes` | Moves boards (with their children) to another page of the file, keeping ids, layouts, images and library links, or copies them to a page of the same or another file of the team (images copied, library refs relinked by name, main components recreated); returns old id → new id |
+| `get_tokens` | Design tokens of a file: themes, sets (active or not) and tokens with the value each resolves to |
+| `edit_tokens` | Adds / updates / deletes token sets, themes and tokens and switches themes and sets on or off, checked like the Tokens panel |
 
 With these an AI client can go from nothing to "project → file → named pages → boards"
-without anyone opening Penpot.
+without anyone opening Penpot, with the team's own fonts and with libraries: its own
+(colors, typographies, components made from boards) or `.penpot` UI kits it imports.
+Library assets are used by name ("Buttons / Primary", "Brand / Primary", "Heading / H1")
+and stay linked like assets applied from the assets panel. Shapes drawn with raw values can
+be linked to the library afterwards (`linkAssets`). Design tokens are applied with
+`"tokens": {"fill": "color.primary", "padding": "space.md"}` and recorded on the shape like
+the Tokens panel does, so token edits in Penpot update them.
 
 The plugin-based tools (`execute_code`, `export_shape`, …) keep working as upstream when a
 plugin session is connected.
@@ -54,12 +68,24 @@ is then ignored.
 ## Limits (for now)
 
 - Supported shapes/properties: see "Supported now" in [engine/README.md](engine/README.md);
-  grid layout, components, groups, paths and SVG import as editable vectors are not yet
-  supported (an SVG can be uploaded and used as an image fill).
+  grid layout, groups, paths and SVG import as editable vectors are not yet supported (an
+  SVG can be uploaded and used as an image fill). Component copies can be created and
+  overridden (texts, size, layers by id); swapping components and editing main components
+  beyond what edit_page does on their boards are not.
+- `.penpot` imports and chunked uploads need Penpot 2.15+ (fonts 2.18+ use chunked
+  uploads only); the deploy bundle uses 2.18.4.
 - Google fonts are loaded through the Penpot instance's `/internal/gfonts/font` proxy, like
   Penpot's exporter; in the editor they show when the instance has the Google Fonts provider
   enabled (Penpot's default).
 - Renaming or deleting projects and files is left to people in Penpot.
+- Token values are resolved here for references and arithmetic on numbers with one unit
+  (`{space.md} * 2`, rem counted as 16px); color modifiers and other Style Dictionary
+  transforms are not. Tokens can set fill, stroke and text colors, radius, opacity,
+  width/height, flex gap/padding, font size, family, weight and letter spacing; shadows,
+  stroke widths, rotation and typography tokens on shapes are not applied yet. A file whose
+  tokens come from a library (its tokens source) can only read them.
+- `move_shapes` moves within one file (to another file it copies); flows and guides of
+  moved boards move along, prototype links that would cross pages are removed.
 - Renders and edits share one render-wasm instance and run one at a time.
 
 ## Where the code lives

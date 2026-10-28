@@ -3,8 +3,10 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import { createHeadlessTools } from "./tools";
 import { HeadlessEngine } from "./HeadlessEngine";
+import { makeFont } from "./fixtures";
 
 /**
  * A fake engine module with the same JS API as engine/dist/engine.js, recording calls
@@ -31,7 +33,7 @@ export async function rpc(ctx, command, params) {
                                               { id: "p2", name: "Drafts", "team-name": "Alphanusa", "team-id": "t1" }];
   if (command === "get-project-files") {
     if (params["project-id"] === "p2") return [];
-    return [{ id: "f1", name: "Landing", "modified-at": "2026-10-20T10:00:00Z" }, { id: "f2", name: "Pricing" }];
+    return [{ id: "f1", name: "Landing", "modified-at": "2026-10-20T10:00:00Z" }, { id: "f2", name: "Pricing", "is-shared": true }];
   }
   throw new Error("unexpected " + command);
 }
@@ -43,6 +45,23 @@ export async function createProject(opts) { calls.push(["createProject", opts]);
 export async function createFile(opts) { calls.push(["createFile", opts]); return { fileId: "f9", name: opts.name, pages: (opts.pages ?? ["Page 1"]).map((n, i) => ({ id: "pg" + i, name: n })) }; }
 export async function editPages(opts) { calls.push(["editPages", opts]); return { pages: [], saved: !opts.dryRun }; }
 export async function listFonts(opts) { calls.push(["listFonts", opts]); return { team: [], builtin: [], google: [{ family: "IBM Plex Sans" }], googleMatches: 1 }; }
+export async function uploadFont(opts) {
+  calls.push(["uploadFont", opts]);
+  return { fontId: "custom-55555555-5555-5555-5555-555555555555", family: opts.family, weight: opts.weight, style: opts.style };
+}
+export async function importLibrary(opts) {
+  calls.push(["importLibrary", opts]);
+  return { files: [{ fileId: "66666666-6666-6666-6666-666666666666", name: opts.name, shared: opts.shared }], linked: [] };
+}
+export async function linkLibrary(opts) { await track("linkLibrary", opts); return { linked: !opts.unlink, synced: !!opts.sync }; }
+export async function libraryAssets(opts) { calls.push(["libraryAssets", opts]); return [{ fileId: opts.fileId, components: [] }]; }
+export async function editLibrary(opts) { await track("editLibrary", opts); return { changes: 1, saved: !opts.dryRun }; }
+export async function moveShapes(opts) {
+  await track("moveShapes", opts);
+  return { mode: opts.mode, ids: Object.fromEntries(opts.ids.map((id) => [id, opts.mode === "copy" ? "new-" + id : id])), saved: !opts.dryRun };
+}
+export async function getTokens(opts) { calls.push(["getTokens", opts]); return { themes: [], sets: [{ name: "core" }], tokens: [], totalTokens: 0 }; }
+export async function editTokens(opts) { calls.push(["editTokens", opts]); return { changes: opts.ops.length, saved: !opts.dryRun }; }
 export async function uploadImage(opts) {
   calls.push(["uploadImage", opts]);
   return { id: "44444444-4444-4444-4444-444444444444", name: opts.name, width: 118, height: 32, mtype: opts.mimeType ?? "image/png" };
@@ -96,6 +115,14 @@ test("registers the browser-free tools", () => {
         "edit_pages",
         "list_fonts",
         "upload_image",
+        "upload_font",
+        "import_library",
+        "link_library",
+        "get_library",
+        "edit_library",
+        "move_shapes",
+        "get_tokens",
+        "edit_tokens",
     ]);
 });
 
@@ -110,7 +137,7 @@ test("list_files lists projects and files with ids", async () => {
     const text = res.content[0].text as string;
     assert.match(text, /## Alphanusa \/ Website — projectId: p1, teamId: t1/);
     assert.match(text, /- Landing — fileId: f1 — modified 2026-10-20T10:00:00.000Z/);
-    assert.match(text, /- Pricing — fileId: f2/);
+    assert.match(text, /- Pricing — fileId: f2 — shared library/);
     // empty projects are listed too: new files can go there
     assert.match(text, /## Alphanusa \/ Drafts — projectId: p2, teamId: t1\n\(no files\)/);
     assert.doesNotMatch(text, /pages:/);
@@ -337,4 +364,186 @@ test("tools missing from an older engine build fail with a clear message", async
         res.content[0].text,
         /engine build on this server is too old for this tool \(it has no createProject\)/
     );
+});
+
+test("upload_font reads family, weight and style from the font file", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const upload = byName(tools, "upload_font");
+    const font = makeFont({ family: "Brand Sans SemiBold", weight: 600, italic: true });
+    const out = JSON.parse(
+        (await upload.execute({ teamId: "77777777-7777-7777-7777-777777777777", dataBase64: font.toString("base64") }))
+            .content[0].text
+    );
+    const call = fake().calls.find((c) => c[0] === "uploadFont")[1];
+    assert.equal(call.teamId, "77777777-7777-7777-7777-777777777777");
+    assert.equal(call.family, "Brand Sans");
+    assert.equal(call.weight, 600);
+    assert.equal(call.style, "italic");
+    assert.equal(call.mimeType, "font/ttf");
+    assert.equal(Buffer.compare(Buffer.from(call.data), font), 0);
+    assert.match(out.usage, /"fontFamily": "Brand Sans", "fontWeight": 600, "fontStyle": "italic"/);
+
+    // explicit values win; WOFF keeps its type
+    const woff = makeFont({ family: "Other", weight: 400, woff: true });
+    await upload.execute({
+        fileId: "f1",
+        dataBase64: woff.toString("base64"),
+        family: "Brand Sans",
+        weight: 700,
+        style: "normal",
+    });
+    const second = fake().calls.filter((c) => c[0] === "uploadFont")[1][1];
+    assert.deepEqual(
+        [second.fileId, second.family, second.weight, second.style, second.mimeType],
+        ["f1", "Brand Sans", 700, "normal", "font/woff"]
+    );
+});
+
+test("upload_font rejects missing teams, non-fonts and unknown weights", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const upload = byName(tools, "upload_font");
+    const font = makeFont({ family: "Brand Sans" }).toString("base64");
+    assert.match((await upload.execute({ dataBase64: font })).content[0].text, /Give teamId or fileId/);
+    assert.match(
+        (
+            await upload.execute({
+                teamId: "77777777-7777-7777-7777-777777777777",
+                dataBase64: Buffer.from("hello").toString("base64"),
+            })
+        ).content[0].text,
+        /Not a font file/
+    );
+    assert.match(
+        (await upload.execute({ teamId: "77777777-7777-7777-7777-777777777777", dataBase64: font, weight: 450 }))
+            .content[0].text,
+        /give weight \(100-900 or 950\)/
+    );
+});
+
+test("import_library downloads a .penpot file and passes the import options", async () => {
+    const pkg = Buffer.from("PK\x03\x04fake penpot package");
+    const http = createServer((req, res) => {
+        res.writeHead(200, { "content-type": "application/zip" });
+        res.end(pkg);
+    });
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
+    try {
+        const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+        const url = `http://127.0.0.1:${(http.address() as any).port}/kits/Material%20UI.penpot`;
+        const out = JSON.parse(
+            (
+                await byName(tools, "import_library").execute({
+                    projectId: "p1",
+                    url,
+                    linkTo: ["f1"],
+                })
+            ).content[0].text
+        );
+        const call = fake().calls.find((c) => c[0] === "importLibrary")[1];
+        assert.equal(call.projectId, "p1");
+        assert.equal(call.name, "Material UI");
+        assert.equal(call.shared, true);
+        assert.deepEqual(call.linkTo, ["f1"]);
+        assert.equal(Buffer.compare(Buffer.from(call.data), pkg), 0);
+        assert.equal(out.files[0].name, "Material UI");
+
+        await byName(tools, "import_library").execute({
+            projectId: "p1",
+            dataBase64: pkg.toString("base64"),
+            shared: false,
+        });
+        const second = fake().calls.filter((c) => c[0] === "importLibrary")[1][1];
+        assert.equal(second.name, "Library");
+        assert.equal(second.shared, false);
+    } finally {
+        http.close();
+    }
+});
+
+test("link_library, get_library and edit_library pass their arguments; sync and library edits use the WASM gate", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    await byName(tools, "link_library").execute({ fileId: "f1", libraryId: "f2", sync: true });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "linkLibrary")[1], {
+        ...ctx,
+        fileId: "f1",
+        libraryId: "f2",
+        unlink: false,
+        sync: true,
+        dryRun: false,
+    });
+    await byName(tools, "get_library").execute({ fileId: "f1", search: "button", limit: 10 });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "libraryAssets")[1], {
+        ...ctx,
+        fileId: "f1",
+        search: "button",
+        limit: 10,
+    });
+    const ops = [{ op: "add", type: "color", name: "Brand / Primary", color: "#3366ff" }];
+    await Promise.all([
+        byName(tools, "edit_library").execute({ fileId: "f1", ops }),
+        byName(tools, "edit_page").execute({ fileId: "f1", ops: [{ op: "delete", id: "x" }] }),
+    ]);
+    assert.deepEqual(fake().calls.find((c) => c[0] === "editLibrary")[1].ops, ops);
+    assert.equal(fake().maxActive, 1);
+});
+
+test("move_shapes passes its arguments and uses the WASM gate", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    const [res] = await Promise.all([
+        byName(tools, "move_shapes").execute({
+            fileId: "f1",
+            ids: ["b1", "b2"],
+            toPageId: "Archive",
+            toFileId: "f2",
+            mode: "copy",
+            x: 0,
+            y: 40,
+        }),
+        byName(tools, "render_shape").execute({ fileId: "f1", pageId: "p", shapeId: "s" }),
+    ]);
+    assert.deepEqual(fake().calls.find((c) => c[0] === "moveShapes")[1], {
+        ...ctx,
+        fileId: "f1",
+        pageId: undefined,
+        ids: ["b1", "b2"],
+        toPageId: "Archive",
+        toFileId: "f2",
+        mode: "copy",
+        x: 0,
+        y: 40,
+        dryRun: false,
+    });
+    assert.deepEqual(JSON.parse(res.content[0].text).ids, { b1: "new-b1", b2: "new-b2" });
+    assert.equal(fake().maxActive, 1);
+    await byName(tools, "move_shapes").execute({ fileId: "f1", ids: ["b1"], toPageId: "p2" });
+    assert.equal(fake().calls.filter((c) => c[0] === "moveShapes")[1][1].mode, "move");
+});
+
+test("get_tokens and edit_tokens pass their arguments", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    const res = await byName(tools, "get_tokens").execute({ fileId: "f1", type: "color", search: "brand" });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "getTokens")[1], {
+        ...ctx,
+        fileId: "f1",
+        set: undefined,
+        type: "color",
+        search: "brand",
+        limit: 200,
+    });
+    assert.equal(JSON.parse(res.content[0].text).sets[0].name, "core");
+    const ops = [
+        { op: "addSet", name: "core", active: true },
+        { op: "addToken", set: "core", type: "color", name: "color.primary", value: "#0066ff" },
+    ];
+    await byName(tools, "edit_tokens").execute({ fileId: "f1", ops, dryRun: true });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "editTokens")[1], { ...ctx, fileId: "f1", ops, dryRun: true });
+});
+
+test("create_file can publish the new file as a shared library", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    await byName(tools, "create_file").execute({ projectId: "p1", name: "Design system", shared: true });
+    assert.equal(fake().calls.find((c) => c[0] === "createFile")[1].shared, true);
 });

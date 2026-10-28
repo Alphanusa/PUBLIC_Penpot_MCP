@@ -192,7 +192,7 @@ jobs:
         run: |
           (cd engine && npm ci --no-audit --no-fund)
           bash engine/scripts/build.sh
-          (cd engine && node test/smoke.mjs && node test/edit-smoke.mjs && node test/features.mjs)
+          (cd engine && node test/smoke.mjs && node test/edit-smoke.mjs && node test/features.mjs && node test/libraries.mjs)
 
       - name: Siapkan engine untuk image
         if: steps.engine.outputs.present == 'true'

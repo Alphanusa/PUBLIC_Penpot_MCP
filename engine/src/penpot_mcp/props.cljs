@@ -26,11 +26,11 @@
 (def fill-props [:color :image :fit :opacity])
 
 (def ^:private geometry-props [:x :y :width :height])
-(def ^:private common-props [:name :opacity :visible :stroke :sizing])
+(def ^:private common-props [:name :opacity :visible :stroke :sizing :tokens])
 (def ^:private box-fill-props [:fill :fillOpacity])
 (def ^:private text-props
-  [:text :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
-   :lineHeight :letterSpacing :growType])
+  [:text :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
+   :lineHeight :letterSpacing :textTransform :growType])
 
 (def ^:private shape-props
   "Props per shape type. `:image` is the `type: \"image\"` sugar of create
@@ -40,6 +40,8 @@
    :circle (vec (concat geometry-props common-props box-fill-props))
    :text   (vec (concat geometry-props common-props text-props))
    :image  (vec (concat geometry-props common-props [:image :fit :fillOpacity :radius]))
+   ;; `type: "component"` of create: a copy of a library component
+   :component [:component :variant :texts :x :y :width :height :name :opacity :visible :sizing]
    ;; groups, paths, booleans, … (update only)
    :other  (vec (concat geometry-props common-props box-fill-props))})
 
@@ -51,7 +53,8 @@
    :delete [:op :id]})
 
 (def ^:private type-names
-  {:frame "board (frame)" :rect "rectangle" :circle "ellipse" :text "text" :image "image"})
+  {:frame "board (frame)" :rect "rectangle" :circle "ellipse" :text "text" :image "image"
+   :component "component instance"})
 
 (def ^:private any-shape-prop
   (into #{} (mapcat val) shape-props))
@@ -114,7 +117,8 @@
       "Refs are given on create; update and delete take the shape \"id\" (or the ref, as \"id\")."
 
       (and (= kind :update) (= k :parent))
-      "Moving a shape to another parent is not supported yet: delete it and create it again under the new parent."
+      (str "To move a shape to another parent or reorder it use the move op: "
+           "{\"op\": \"move\", \"id\": …, \"parent\": …, \"index\": …}.")
 
       (layout-prop? k)
       (if (= type :frame)
@@ -126,6 +130,10 @@
 
       (and (= k :fill) (= type :image))
       "Images take \"image\" (a media id from upload_image) and \"fit\"."
+
+      (= type :component)
+      (str "A component instance takes the component's look; change " (quoted k)
+           " with an update on the instance or one of its layers after creating it.")
 
       (any-shape-prop k)
       (str (quoted k) " is not supported on " tname ".")

@@ -20,7 +20,21 @@
                editPages       penpot-mcp.engine/edit-pages
                listFonts       penpot-mcp.engine/list-fonts
                uploadImage     penpot-mcp.engine/upload-image
+               uploadFont      penpot-mcp.engine/upload-font
+               importLibrary   penpot-mcp.engine/import-library
+               linkLibrary     penpot-mcp.engine/link-library
+               libraryAssets   penpot-mcp.engine/library-assets
+               editLibrary     penpot-mcp.engine/edit-library
+               moveShapes      penpot-mcp.engine/move-shapes
+               getTokens       penpot-mcp.engine/get-tokens
+               editTokens      penpot-mcp.engine/edit-tokens
                pagesOffline    penpot-mcp.engine/pages-offline
+               libraryOffline  penpot-mcp.engine/library-offline
+               editLibraryOffline penpot-mcp.engine/edit-library-offline
+               moveShapesOffline penpot-mcp.engine/move-shapes-offline
+               renderFileOffline penpot-mcp.engine/render-file-offline
+               tokensOffline   penpot-mcp.engine/tokens-offline
+               fileTransit     penpot-mcp.engine/file-transit
                imageInfo       penpot-mcp.engine/image-info
                renderDemo      penpot-mcp.engine/render-demo}}}
 
