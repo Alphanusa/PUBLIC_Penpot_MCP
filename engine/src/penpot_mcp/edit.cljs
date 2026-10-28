@@ -34,21 +34,26 @@
    [app.common.files.changes-builder :as pcb]
    [app.common.files.helpers :as cfh]
    [app.common.files.shapes-helpers :as cfsh]
+   [app.common.files.variant :as cfv]
    [app.common.geom.modifiers :as gm]
    [app.common.geom.point :as gpt]
    [app.common.geom.shapes :as gsh]
    [app.common.logic.libraries :as cll]
    [app.common.logic.shapes :as cls]
+   [app.common.logic.variants :as clv]
+   [app.common.path-names :as cpn]
    [app.common.render-wasm.api.select :as wselect]
    [app.common.render-wasm.helpers :as h]
    [app.common.render-wasm.mem :as mem]
    [app.common.render-wasm.wasm :as rwasm]
    [app.common.types.component :as ctk]
    [app.common.types.container :as ctn]
+   [app.common.types.file :as ctf]
    [app.common.types.modifiers :as ctm]
    [app.common.types.shape :as cts]
    [app.common.types.shape.layout :as ctl]
    [app.common.types.text :as txt]
+   [app.common.types.variant :as ctv]
    [app.common.uuid :as uuid]
    [cuerdas.core :as str]
    [penpot-mcp.fonts :as fonts]
@@ -665,7 +670,7 @@
         objects   (objects-of state)
         candidates (descendant-texts objects id)]
     (reduce (fn [state [layer text]]
-              (let [layer  (name layer)
+              (let [layer  (u/key-str layer)
                     target (or (d/seek #(= layer (:name %)) candidates)
                                (error! (str "No text layer named " (pr-str layer) " in " (pr-str component)
                                             ". Text layers: " (str/join ", " (map #(pr-str (:name %)) candidates)))
@@ -734,28 +739,73 @@
         (assoc :changes changes)
         (update :deleted into ids))))
 
-(defn- add-own-component
-  "Makes component `component-id`, just added to the file's own library,
-  usable by the next ops of the batch (copies of it, by name)."
-  [state component-id]
-  (let [file-id (::file-id state)
-        change  (d/seek #(and (= :add-component (:type %)) (= component-id (:id %)))
-                        (:redo-changes (:changes state)))
+(def ^:private library-change-types
+  #{:add-component :mod-component :del-component :restore-component :purge-component
+    :add-color :mod-color :del-color :add-typography :mod-typography :del-typography})
+
+(defn- sync-own-library
+  "Applies the library changes of the batch not applied yet (components
+  made, variants, annotations, …) to the file's own library data, so the
+  next ops of the batch see them (copies of a component made earlier, by
+  name)."
+  [state]
+  (let [redo    (vec (:redo-changes (:changes state)))
+        from    (min (or (::lib-applied state) 0) (count redo))
+        new     (filterv #(contains? library-change-types (:type %)) (subvec redo from))
+        state   (assoc state ::lib-applied (count redo))
+        file-id (::file-id state)
         own     (get-in state [:libraries file-id])]
-    (if (and change own)
+    (if (and (seq new) own)
       (let [libs (assoc-in (:libraries state) [file-id :data]
-                           (cfc/process-changes (or (:data own) {}) [change] false))]
+                           (cfc/process-changes (or (:data own) {}) new false))]
         (assoc state
                :libraries libs
                :assets (library/index (cons (get libs file-id) (vals (dissoc libs file-id))))))
       state)))
+
+(defn- own-data
+  "The edited file's data, with the page as it is now in the batch."
+  [state]
+  (let [page-id (::page-id state)
+        file-id (::file-id state)
+        data    (or (get-in state [:libraries file-id :data]) {})]
+    (-> data
+        (cond-> (nil? (:id data)) (assoc :id file-id))
+        (cond-> (not (some #{page-id} (:pages data))) (update :pages (fnil conj []) page-id))
+        (update-in [:pages-index page-id] assoc :id page-id :objects (objects-of state)))))
+
+(defn- libraries-now
+  "file id -> {:id :data} of the file and its libraries, with the edited
+  file as it is now in the batch."
+  [state]
+  (let [file-id (::file-id state)]
+    (-> (:libraries state)
+        (assoc file-id (assoc (get-in state [:libraries file-id]) :id file-id :data (own-data state))))))
+
+(defn- run-sub
+  "Runs one of Penpot's change generators on new changes for the page as it
+  is now (and the file's own library) and appends what it generates to the
+  batch: the generators set their own page and objects on the changes they
+  get, which would replay the batch's earlier changes. `f` takes the changes
+  and returns [result changes]; returns [result state]."
+  [state f]
+  (let [objects (objects-of state)
+        page    {:id (::page-id state) :objects objects}
+        sub     (-> (pcb/empty-changes :mcp (::page-id state))
+                    (pcb/with-page page)
+                    (pcb/with-objects objects)
+                    (pcb/with-library-data (own-data state)))
+        [result sub] (f sub)]
+    [result (-> state
+                (update :changes #(-> (pcb/concat-changes % sub) (pcb/apply-changes-local)))
+                (sync-own-library))]))
 
 (defn- op-make-component
   "Turns a board into a main component of the file's library, like
   \"Create component\" in the editor (`generate-add-component`). The board
   stays where it is as the component's main instance."
   [state op]
-  (props/check-keys! op [:op :id :name] "for makeComponent")
+  (props/check-keys! op [:op :id :name :annotation] "for makeComponent")
   (let [objects (objects-of state)
         id      (or (resolve-id state (:id op) "id") (error! "makeComponent needs the id of a board" {:field "id"}))
         shape   (or (get objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
@@ -767,13 +817,19 @@
                   (error! "makeComponent needs the file id" {:field "op"}))
         state   (if (some? (:name op)) (op-update state {:op "update" :id (str id) :name (:name op)}) state)
         objects (objects-of state)
+        annotation (some-> (:annotation op) str str/trim not-empty)
         [_ component-id changes]
         (cll/generate-add-component (:changes state) [(get objects id)] objects (::page-id state) (::file-id state)
-                                    cfsh/prepare-create-artboard-from-selection)]
+                                    cfsh/prepare-create-artboard-from-selection)
+        changes (cond-> changes
+                  annotation
+                  (pcb/amend-changes #(cond-> %
+                                        (and (= :add-component (:type %)) (= component-id (:id %)))
+                                        (assoc :annotation annotation))))]
     (-> state
         (assoc :changes changes)
         (update :components (fnil conj []) component-id)
-        (add-own-component component-id))))
+        (sync-own-library))))
 
 (defn- layer-index!
   [v n]
@@ -877,6 +933,427 @@
         (update :link-reports (fnil conj [])
                 (assoc report :scope (if (= scope-id uuid/zero) "page" (str scope-id)))))))
 
+;; --- components: annotations, variants, swap, detach, reset
+
+(declare touch)
+
+(defn- shape!
+  "The shape `v` (id or ref) of the page, or an error."
+  [state v field what]
+  (let [id (or (resolve-id state v field) (error! (str what " needs \"" field "\"") {:field field}))]
+    (or (get (objects-of state) id)
+        (error! (str "Shape " id " not found on this page") {:field field}))))
+
+(defn- own-component!
+  "The component of the file's own library whose main instance is `shape`."
+  [state shape field]
+  (or (when (and (ctk/main-instance? shape) (= (:component-file shape) (::file-id state)))
+        (get-in (own-data state) [:components (:component-id shape)]))
+      (error! (str (pr-str (:name shape)) " is not the main of a component of this file"
+                   (cond
+                     (ctk/in-component-copy? shape)
+                     " (it is a copy: change its main component, or use swap, detach or resetOverrides)"
+                     (ctk/main-instance? shape)
+                     " (its component belongs to another file)"))
+              {:field field})))
+
+(defn- op-annotate
+  "Sets (or with null / \"\" removes) the annotation of a component, the
+  note shown with it in the assets panel and the design tab."
+  [state op]
+  (props/check-keys! op [:op :id :annotation] "for annotate")
+  (let [shape (shape! state (:id op) "id" "annotate")
+        comp  (own-component! state shape "id")
+        text  (:annotation op)
+        _     (when-not (or (nil? text) (string? text))
+                (error! "annotation must be a text, or null to remove it" {:field "annotation"}))
+        text  (some-> text str/trim not-empty)]
+    (second
+     (run-sub state (fn [changes]
+                      [nil (pcb/update-component changes (:id comp)
+                                                 #(if text (assoc % :annotation text) (dissoc % :annotation)))])))))
+
+(defn- variant-props!
+  "Variant properties from JSON ({\"Type\": \"Primary\"}) as [[name value] ...]."
+  [m field]
+  (when-not (and (map? m) (every? string? (vals m)))
+    (error! (str field " must map property names to texts, e.g. {\"Type\": \"Primary\", \"Size\": \"M\"}")
+            {:field field :value m}))
+  (mapv (fn [[k v]]
+          (let [k (ctv/normalize-property-text (u/key-str k))
+                v (ctv/normalize-property-text v)]
+            (when-not (ctv/valid-property-name? k)
+              (error! (str "Invalid property name " (pr-str k) " in " field " (1 to 60 characters)") {:field field}))
+            (when-not (ctv/valid-property-value? v)
+              (error! (str "The value of " (pr-str k) " in " field " is too long (60 characters at most)") {:field field}))
+            [k v]))
+        m))
+
+(defn- variant-components
+  "Components of the variant set whose board is `container-id`, in the
+  order of its layers."
+  [state container-id]
+  (vec (remove nil? (cfv/find-variant-components (own-data state) (objects-of state) container-id))))
+
+(defn- merged-props
+  "component id -> [[name value] ...] for `comps` with `updates` (component
+  id -> [[name value] ...]): names keep their order, new names go last, with
+  \"\" for the variants that don't set them."
+  [comps updates]
+  (let [cur   (fn [c] (mapv (juxt :name :value) (:variant-properties c)))
+        names (reduce (fn [names n] (if (some #{n} names) names (conj names n)))
+                      []
+                      (concat (mapcat #(map first (cur %)) comps)
+                              (mapcat #(map first (get updates (:id %))) comps)))]
+    (into {}
+          (map (fn [c]
+                 (let [m (merge (into {} (cur c)) (into {} (get updates (:id c))))]
+                   [(:id c) (mapv (fn [n] [n (get m n "")]) names)])))
+          comps)))
+
+(defn- props-text
+  [props]
+  (str/join ", " (map (fn [[n v]] (str n "=" v)) props)))
+
+(defn- write-variant-props
+  "Sets the properties of every variant of the set `container-id`
+  (`props-of`: component -> [[name value] ...], same names in the same
+  order for all), with the component and main names Penpot derives from
+  them, like `generate-make-shapes-variant`."
+  [state container-id props-of]
+  (let [container (get (objects-of state) container-id)
+        comps     (variant-components state container-id)
+        [cpath cname] (cpn/split-group-name (:name container))
+        new       (mapv (fn [c] [c (props-of c)]) comps)
+        names     (mapv first (second (first new)))
+        _         (when (empty? names)
+                    (error! "A variant set needs at least one property" {:field "properties"}))
+        _         (when-not (apply distinct? names)
+                    (error! (str "Two properties would have the same name: " (str/join ", " names)) {:field "rename"}))
+        dup       (->> new
+                       (group-by (fn [[_ props]] (mapv (comp str/lower second) props)))
+                       (vals)
+                       (d/seek #(> (count %) 1)))
+        _         (when dup
+                    (error! (str "Variants must differ in at least one property: "
+                                 (str/join " and " (map (fn [[c _]] (pr-str (:name (get (objects-of state) (:main-instance-id c)))))
+                                                        (take 2 dup)))
+                                 " would both be " (props-text (second (first dup))))
+                            {:field "properties"}))]
+    (second
+     (run-sub state
+              (fn [changes]
+                [nil
+                 (reduce (fn [changes [c props]]
+                           (let [props (mapv (fn [[n v]] {:name n :value v}) props)]
+                             (-> changes
+                                 (pcb/update-component (:id c)
+                                                       #(assoc % :variant-id container-id :variant-properties props
+                                                               :name cname :path cpath))
+                                 (pcb/update-shapes [(:main-instance-id c)]
+                                                    #(assoc % :variant-id container-id
+                                                            :variant-name (ctv/properties-to-name props)
+                                                            :name (:name container))))))
+                         changes
+                         new)])))))
+
+(defn- variant-defaults
+  "The variant set board the editor makes: no fill, a purple dashed-look
+  stroke, rounded, and (unless `layout` is false) a flex layout that
+  arranges the variants."
+  [layout]
+  (let [flex (cond
+               (map? layout) (merge {:direction "row" :gap 20 :padding 30} layout)
+               (or (nil? layout) (true? layout)) {:direction "row" :gap 20 :padding 30}
+               (false? layout) nil
+               :else (error! "layout must be an object like {\"direction\": \"column\", \"gap\": 16} or false"
+                             {:field "layout"}))]
+    (d/without-nils
+     {:fill "none"
+      :radius 20
+      :stroke {:color "#bb97d8" :width 2 :align "inner"}
+      :layout flex
+      :sizing (when flex {:h "hug" :v "hug"})})))
+
+(defn- op-make-variants
+  "Combines boards or main components into a variant set (a new one named
+  `name`, or the existing set `container`), each with its `properties`,
+  like \"Combine as variants\" in the editor. Boards that aren't
+  components yet become components first."
+  [state op]
+  (props/check-keys! op [:op :ref :name :container :parent :x :y :layout :variants] "for makeVariants")
+  (let [{:keys [variants container]} op
+        _       (when-not (and (sequential? variants) (seq variants) (every? map? variants))
+                  (error! (str "variants must be a list like [{\"id\": <board or main component>, "
+                               "\"properties\": {\"Type\": \"Primary\"}}, …]")
+                          {:field "variants"}))
+        _       (doseq [v variants] (props/check-keys! v [:id :properties] "in a variant"))
+        _       (when (and (some? container) (some #(contains? op %) [:name :parent :x :y :layout :ref]))
+                  (error! "With \"container\" (an existing variant set) give only \"variants\"" {:field "container"}))
+        _       (when (and (nil? container) (str/blank? (some-> (:name op) str)))
+                  (error! (str "makeVariants needs \"name\" (the component, e.g. \"Button\") or \"container\" "
+                               "(the board of an existing variant set)")
+                          {:field "name"}))
+        ids     (mapv #(:id (shape! state (:id %) "id" "Each variant")) variants)
+        _       (when-not (apply distinct? ids) (error! "A shape is listed twice in variants" {:field "variants"}))
+        props   (mapv (fn [v]
+                        (let [p (variant-props! (:properties v) "properties")]
+                          (when (empty? p)
+                            (error! "Each variant needs properties, e.g. {\"Type\": \"Primary\"}" {:field "properties"}))
+                          p))
+                      variants)
+        ;; boards become components first
+        state   (reduce (fn [state id]
+                          (let [shape (get (objects-of state) id)]
+                            (cond
+                              (ctk/main-instance? shape)
+                              (let [c (own-component! state shape "variants.id")]
+                                (when (ctk/is-variant? c)
+                                  (error! (str (pr-str (:name shape)) " is already a variant; change it with setVariant")
+                                          {:field "variants.id"}))
+                                state)
+
+                              (and (cfh/frame-shape? shape) (not (ctk/instance-head? shape))
+                                   (not (ctk/in-component-copy? shape)))
+                              (op-make-component state {:op "makeComponent" :id (str id)})
+
+                              :else
+                              (error! (str (pr-str (:name shape)) ": variants are boards or main components") {:field "variants.id"}))))
+                        state
+                        ids)
+        objects (objects-of state)
+        cont    (when (some? container)
+                  (let [c (shape! state container "container" "makeVariants")]
+                    (when-not (ctk/is-variant-container? c)
+                      (error! "container must be the board of a variant set" {:field "container"}))
+                    c))
+        state   (if cont
+                  ;; the editor names a main the set's name when it joins the set
+                  (update state :changes pcb/update-shapes ids #(assoc % :name (:name cont)))
+                  (let [shapes    (mapv #(get objects %) ids)
+                        parent-id (or (resolve-id state (:parent op) "parent") (:parent-id (first shapes)))
+                        origin    (parent-origin objects parent-id)
+                        rect      (gsh/shapes->rect shapes)
+                        x         (number! (:x op) "x")
+                        y         (number! (:y op) "y")]
+                    (op-create state (merge {:op "create" :type "frame" :name (str/trim (str (:name op)))
+                                             :parent (str parent-id)
+                                             :x (or x (- (:x rect) (:x origin) 30))
+                                             :y (or y (- (:y rect) (:y origin) 30))
+                                             :width (+ (:width rect) 60) :height (+ (:height rect) 60)}
+                                            (when (some? (:ref op)) {:ref (:ref op)})
+                                            (variant-defaults (:layout op))))))
+        cont-id (or (:id cont) (last (:created state)))
+        start   (count (:shapes (get (objects-of state) cont-id)))
+        state   (reduce (fn [state [i id]]
+                          (op-move state {:op "move" :id (str id) :parent (str cont-id) :index (+ start i)}))
+                        state
+                        (map-indexed vector ids))
+        state   (cond-> state
+                  (nil? cont) (update :changes pcb/update-shapes [cont-id] #(assoc % :is-variant-container true)))
+        comps   (variant-components state cont-id)
+        by-main (into {} (map (juxt :main-instance-id :id)) comps)
+        updates (into {} (map (fn [id p] [(get by-main id) p]) ids props))
+        merged  (merged-props comps updates)]
+    (-> (write-variant-props state cont-id #(get merged (:id %)))
+        (update :variant-sets (fnil conj []) cont-id))))
+
+(defn- variant-of!
+  "[set-board-id component-id-or-nil] of a variant main or a set board."
+  [state shape]
+  (cond
+    (ctk/is-variant-container? shape) [(:id shape) nil]
+    (and (ctk/main-instance? shape) (ctk/is-variant? shape)) [(:variant-id shape) (:component-id shape)]
+    :else (error! (str (pr-str (:name shape)) " is not a variant (the main of a variant component) nor a variant set")
+                  {:field "id"})))
+
+(defn- op-set-variant
+  "Changes variant properties: `properties` of one variant (its main), and
+  `rename` ({old: new}) / `remove` ([names]) for its whole set (the id of
+  any variant or of the set's board)."
+  [state op]
+  (props/check-keys! op [:op :id :properties :rename :remove] "for setVariant")
+  (let [shape   (shape! state (:id op) "id" "setVariant")
+        [cont-id comp-id] (variant-of! state shape)
+        _       (when-not (some #(contains? op %) [:properties :rename :remove])
+                  (error! "setVariant needs \"properties\", \"rename\" or \"remove\"" {:field "op"}))
+        _       (when (and (contains? op :properties) (nil? comp-id))
+                  (error! "properties are set on one variant: give the id of its main, not of the set" {:field "properties"}))
+        comps   (variant-components state cont-id)
+        names   (mapv :name (:variant-properties (first comps)))
+        unknown (fn [n field]
+                  (when-not (some #{n} names)
+                    (error! (str "No property named " (pr-str n) ". Properties: " (str/join ", " names)) {:field field})))
+        rename  (when (contains? op :rename) (into {} (variant-props! (:rename op) "rename")))
+        _       (doseq [[old new] rename]
+                  (unknown old "rename")
+                  (when (str/blank? new) (error! "New property names can't be empty" {:field "rename"})))
+        remove* (when (contains? op :remove)
+                  (let [r (:remove op)]
+                    (when-not (and (sequential? r) (every? string? r))
+                      (error! "remove must be a list of property names" {:field "remove"}))
+                    (doseq [n r] (unknown n "remove"))
+                    (set r)))
+        updates (when comp-id {comp-id (variant-props! (:properties op) "properties")})
+        comps'  (mapv (fn [c]
+                        (update c :variant-properties
+                                (fn [ps]
+                                  (->> ps
+                                       (remove #(contains? remove* (:name %)))
+                                       (mapv #(update % :name (fn [n] (get rename n n))))))))
+                      comps)
+        merged  (merged-props comps' updates)]
+    (write-variant-props state cont-id #(get merged (:id %)))))
+
+(defn- copy-head!
+  [state v op-name]
+  (let [shape (shape! state v "id" op-name)]
+    (when-not (and (ctk/instance-head? shape) (ctk/in-component-copy? shape))
+      (error! (str op-name " needs a component copy (its top layer, or the top layer of a copy nested in it)"
+                   (when (ctk/main-instance? shape) "; this is a main component"))
+              {:field "id"}))
+    shape))
+
+(defn- prop-value
+  [component n]
+  (some #(when (= (str/lower n) (str/lower (:name %))) (:value %)) (:variant-properties component)))
+
+(defn- swap-target
+  "The component a swap goes to: `component` by name (and `variant`), or
+  with only `variant`, the variant of the copy's set closest to its current
+  one with those values (what the variant selector of the design tab
+  does)."
+  [state shape op]
+  (let [libs    (libraries-now state)
+        data    (get-in libs [(:component-file shape) :data])
+        current (get-in data [:components (:component-id shape)])
+        variant (when (contains? op :variant) (variant-props! (:variant op) "variant"))]
+    (cond
+      (some? (:component op))
+      (let [c (library/find-asset (:assets state) :components (:component op) "component" (into {} variant))]
+        [c (get-in libs [(::library/file-id c) :data])])
+
+      (seq variant)
+      (let [_       (when-not (ctk/is-variant? current)
+                      (error! "This copy is not a variant: give \"component\" to swap it for another component"
+                              {:field "variant"}))
+            comps   (remove nil? (cfv/find-variant-components
+                                  data (get-in data [:pages-index (:main-instance-page current) :objects])
+                                  (:variant-id current)))
+            names   (mapv :name (:variant-properties current))
+            _       (doseq [[n] variant]
+                      (when-not (some #(= (str/lower n) (str/lower %)) names)
+                        (error! (str "No property named " (pr-str n) ". Properties: " (str/join ", " names))
+                                {:field "variant"})))
+            target  (mapv (fn [{:keys [name value]}]
+                            (or (some (fn [[n v]] (when (= (str/lower n) (str/lower name)) v)) variant) value))
+                          (:variant-properties current))
+            valid   (filter (fn [c] (every? (fn [[n v]] (= (str/lower v) (str/lower (str (prop-value c n))))) variant))
+                            comps)]
+        (if (empty? valid)
+          (error! (str "No variant has " (props-text variant) ". Variants: "
+                       (str/join "; " (map #(props-text (map (juxt :name :value) (:variant-properties %))) comps)))
+                  {:field "variant"})
+          [(apply min-key #(ctv/distance target (mapv :value (:variant-properties %))) valid) data]))
+
+      :else
+      (error! "swap needs \"component\" (a component name) and/or \"variant\" ({property: value})" {:field "op"}))))
+
+(defn- op-swap
+  "Swaps a component copy for another component, or switches it to another
+  variant, like the component menu and the variant selector of the design
+  tab (`generate-component-swap`). By default the overrides of the copy
+  (texts, colors, swapped icons, …) are kept on the layers the new
+  component has too, like a variant switch in the editor."
+  [state op]
+  (props/check-keys! op [:op :id :component :variant :keepOverrides] "for swap")
+  (let [shape   (copy-head! state (:id op) "swap")
+        id      (:id shape)
+        [target ldata] (swap-target state shape op)
+        objects (objects-of state)]
+    (if (and (= (:id target) (:component-id shape)) (= (:id ldata) (:component-file shape)))
+      state
+      (let [libs   (libraries-now state)
+            tpage  (ctf/get-component-page ldata target)
+            root   (ctf/get-component-root ldata target)
+            _      (when (and tpage root
+                              (cfh/components-nesting-loop? (cfh/get-children-with-self (:objects tpage) (:id root))
+                                                            (cfh/get-parents-with-self objects (:parent-id shape))))
+                     (error! "This would put a component inside itself" {:field "component"}))
+            parent (get objects (:parent-id shape))
+            index  (d/index-of (:shapes parent) id)
+            cell   (when (ctl/grid-layout? parent) (ctl/get-cell-by-shape-id parent id))
+            keep?  (not (false? (bool! (:keepOverrides op) "keepOverrides")))
+            orig   (when keep? (cfh/get-children-with-self objects id))
+            page   {:id (::page-id state) :objects objects}
+            [new-shape state]
+            (run-sub state
+                     (fn [changes]
+                       (let [[new-shape _ changes]
+                             (cll/generate-component-swap changes objects shape ldata page libs (:id target)
+                                                          index cell (select-keys shape ctk/swap-keep-attrs) keep?)
+                             [changes _] (if keep?
+                                           (clv/generate-keep-touched changes new-shape shape orig page libs ldata)
+                                           [changes nil])]
+                         [new-shape changes])))
+            new-id (:id new-shape)]
+        (-> state
+            (touch (cfh/get-children-ids-with-self (objects-of state) new-id))
+            (update :relocated (fnil conj []) new-id)
+            (update :swapped (fnil conj []) new-id))))))
+
+(defn- op-detach
+  "Detaches a component copy: it becomes plain layers, no longer updated
+  from its main (copies nested in it stay copies)."
+  [state op]
+  (props/check-keys! op [:op :id] "for detach")
+  (let [shape     (copy-head! state (:id op) "detach")
+        container (ctn/make-container (get-in (own-data state) [:pages-index (::page-id state)]) :page)]
+    (-> (second (run-sub state (fn [changes]
+                                 [nil (cll/generate-detach-instance changes container (libraries-now state) (:id shape))])))
+        (update :detached (fnil conj []) (:id shape)))))
+
+(defn- op-reset-overrides
+  "Resets a component copy to its main: all overrides (texts, colors,
+  sizes, swaps) are dropped, like \"Reset overrides\" in the editor."
+  [state op]
+  (props/check-keys! op [:op :id] "for resetOverrides")
+  (let [shape     (copy-head! state (:id op) "resetOverrides")
+        data      (own-data state)
+        container (ctn/make-container (get-in data [:pages-index (::page-id state)]) :page)
+        state     (second (run-sub state (fn [changes]
+                                           [nil (cll/generate-reset-component changes {:id (:id data) :data data}
+                                                                              (libraries-now state) container (:id shape))])))]
+    (-> state
+        (touch (cfh/get-children-ids-with-self (objects-of state) (:id shape)))
+        (update :relocated (fnil conj []) (:id shape)))))
+
+(defn changed-mains
+  "Ids of the components of the edited file whose main instance (any layer
+  of it) changed in this batch: their copies must be updated, as the editor
+  does after editing a main. `before`: the page objects before the batch."
+  [state before]
+  (let [objects (objects-of state)
+        file-id (::file-id state)
+        ids     (into #{}
+                      (mapcat (fn [c]
+                                (when (= (:page-id c) (::page-id state))
+                                  (case (:type c)
+                                    (:add-obj :mod-obj :del-obj) [(:id c)]
+                                    :mov-objects (cons (:parent-id c) (:shapes c))
+                                    :reorder-children [(:parent-id c)]
+                                    nil))))
+                      (:redo-changes (:changes state)))]
+    (into #{}
+          (comp (mapcat (fn [id]
+                          (let [objs (if (contains? objects id) objects before)]
+                            (keep #(get objs %) (cons id (cfh/get-parent-ids objs id))))))
+                (filter ctk/main-instance?)
+                (filter #(= file-id (:component-file %)))
+                (map :component-id))
+          ids)))
+
+
 (defn- color-name?
   [v]
   (and (string? v) (not (str/starts-with? v "#")) (not= "none" v)))
@@ -890,7 +1367,7 @@
      (some (fn [op]
              (when (map? op)
                (or (= "component" (some-> (:type op) str str/lower))
-                   (= "linkassets" (some-> (:op op) str str/lower))
+                   (contains? #{"linkassets" "swap" "detach" "resetoverrides"} (some-> (:op op) str str/lower))
                    (contains? op :typography)
                    (color-name? (:fill op))
                    (color-name? (:textColor op))
@@ -964,7 +1441,8 @@
                (try
                  (when-not (map? op)
                    (error! "Each op must be an object like {\"op\": \"create\", ...}" {:field "op"}))
-                 (case (some-> (:op op) str str/lower)
+                 (sync-own-library
+                  (case (some-> (:op op) str str/lower)
                    "create" (if (= "component" (some-> (:type op) str str/lower))
                               (op-instance state op)
                               (op-create state op))
@@ -973,9 +1451,16 @@
                    "delete" (op-delete state op)
                    "move" (op-move state op)
                    "linkassets" (op-link-assets state op)
+                   "annotate" (op-annotate state op)
+                   "makevariants" (op-make-variants state op)
+                   "setvariant" (op-set-variant state op)
+                   "swap" (op-swap state op)
+                   "detach" (op-detach state op)
+                   "resetoverrides" (op-reset-overrides state op)
                    (error! (str "Unknown op " (pr-str (:op op))
-                                ". Use create, update, delete, move, makeComponent or linkAssets")
-                           {:field "op"}))
+                                ". Use create, update, delete, move, makeComponent, makeVariants, setVariant, "
+                                "swap, detach, resetOverrides, annotate or linkAssets")
+                           {:field "op"})))
                  (catch :default cause
                    (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
                                    (assoc (ex-data cause) :index idx)
@@ -1285,7 +1770,15 @@
                     :padding (:layout-padding shape)}))
         :sizing (let [h (:layout-item-h-sizing shape) v (:layout-item-v-sizing shape)]
                   (when (or h v) (d/without-nils {:h (some-> h name) :v (some-> v name)})))
-        :component (when (:component-root shape) (str (:component-id shape)))
+        :component (when (ctk/instance-head? shape)
+                     (let [info (get names (:component-id shape))]
+                       (d/without-nils
+                        {:id (str (:component-id shape))
+                         :name (or (:name info) "(component not available)")
+                         :variant (:variant info)
+                         :main (when (ctk/main-instance? shape) true)
+                         :nested (when (and (not (:component-root shape)) (not (ctk/main-instance? shape))) true)})))
+        :variantSet (when (ctk/is-variant-container? shape) true)
         :tokens (some->> (:applied-tokens shape) not-empty (into {} (map (fn [[k v]] [(name k) v]))))
         :hidden (when (:hidden shape) true)})))))
 
@@ -1315,7 +1808,8 @@
   [shapes]
   (into #{}
         (comp (mapcat (fn [shape]
-                        (concat (map :fill-color-ref-file (:fills shape))
+                        (concat [(:component-file shape)]
+                                (map :fill-color-ref-file (:fills shape))
                                 (map :stroke-color-ref-file (:strokes shape))
                                 (when (cfh/text-shape? shape)
                                   (mapcat (fn [node] (cons (:typography-ref-file node)

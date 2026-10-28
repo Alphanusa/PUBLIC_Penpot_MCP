@@ -80,7 +80,7 @@
   [component variant]
   (let [props (into {} (map (fn [{:keys [name value]}] [(str/lower name) (str/lower value)]))
                     (:variant-properties component))]
-    (every? (fn [[k v]] (= (get props (str/lower (name k))) (str/lower (str v)))) variant)))
+    (every? (fn [[k v]] (= (get props (str/lower (u/key-str k))) (str/lower (str v)))) variant)))
 
 (defn find-asset
   "The asset of `kind` (:components, :colors, :typographies) named `query`.
@@ -124,14 +124,17 @@
             (vals (get data kind)))))
 
 (defn asset-names
-  "Asset id -> {:name full-name :file file-id :file-name name} for the colors
-  and typographies of an `index`, to name the library refs of shapes."
+  "Asset id -> {:name full-name :file file-id :file-name name} for the
+  colors, typographies and components (with :variant) of an `index`, to name
+  the library refs and component links of shapes."
   [index]
   (into {}
-        (map (fn [asset] [(:id asset) {:name (full-name asset)
-                                       :file (::file-id asset)
-                                       :file-name (::file-name asset)}]))
-        (concat (:colors index) (:typographies index))))
+        (map (fn [asset] [(:id asset) (d/without-nils
+                                       {:name (full-name asset)
+                                        :variant (variant-desc asset)
+                                        :file (::file-id asset)
+                                        :file-name (::file-name asset)})]))
+        (concat (:colors index) (:typographies index) (:components index))))
 
 (defn library-data
   "Data of the file that owns `asset`, from `libraries` (id -> file)."
@@ -154,6 +157,7 @@
     (d/without-nils
      {:name (full-name component)
       :variant (variant-desc component)
+      :annotation (:annotation component)
       :width (round width)
       :height (round height)})))
 

@@ -581,8 +581,36 @@
 
 (declare tokens-source-data!)
 
+(declare sync-file!)
+
+(defn- edit-file!
+  "The edit pipeline on a loaded `file`: `ops` on page `page-id`, then the
+  copies of the file's components whose main changed are updated on every
+  page, like the editor does after editing a main. `linked`: the linked
+  libraries, `toks`: the active tokens. Resolves to {:changes :data :result}."
+  [ctx file page-id ops variants linked toks]
+  (let [page (or (get-in file [:data :pages-index page-id])
+                 (throw (ex-info (str "Page " page-id " not found in file " (:id file)) {:type :invalid-op})))
+        libs (into [(own-library file)] linked)]
+    (p/let [state  (edit-objects! ctx page-id (:objects page) ops variants
+                                  {:libraries libs :file-id (:id file) :tokens toks})
+            redo   (vec (:redo-changes (:changes state)))
+            data   (p/do (cfc/process-changes (:data file) redo false))
+            mains  (p/do (edit/changed-mains state (:objects page)))
+            synced (if (seq mains)
+                     (sync-file! ctx (assoc file :data data) libs (:id file)
+                                 (mapv (fn [id] [:components id]) mains) variants)
+                     {:changes [] :data data})]
+      (let [extra (:changes synced)]
+        {:changes (into redo extra)
+         :data (:data synced)
+         :result (cond-> (assoc (edit-result state) :pageId (str page-id))
+                   (seq extra)
+                   (assoc :copiesUpdated (count (into #{} (comp (filter #(= :mod-obj (:type %))) (map :id)) extra))))}))))
+
 (defn apply-ops
-  "JS entry. Applies `ops` to a page of a Penpot file and saves them.
+  "JS entry. Applies `ops` to a page of a Penpot file and saves them (with
+  the copies of components whose main changed).
 
   opts: {baseUri, token, fileId, pageId?, ops, dryRun?}
   Resolves to {changes, created: {ref: id}, createdIds, deleted, shapes, revn}."
@@ -598,14 +626,8 @@
                         (p/fmap (fn [src] (tokens/active-tokens (:data file) src)) (tokens-source-data! ctx file))
                         {})
               page-id (or (some-> (.-pageId opts) ->uuid) (first-page-id file))
-              page    (or (get-in file [:data :pages-index page-id])
-                          (throw (ex-info (str "Page " page-id " not found in file " file-id) {})))
-              state   (edit-objects! ctx page-id (:objects page) ops variants
-                                     {:libraries (into [(own-library file)] linked)
-                                      :file-id (:id file)
-                                      :tokens toks})
-              result  (save-changes! ctx file (:redo-changes (:changes state)) (.-dryRun opts)
-                                     (assoc (edit-result state) :pageId (str page-id)))]
+              {:keys [changes result]} (edit-file! ctx file page-id ops variants linked toks)
+              result  (save-changes! ctx file changes (.-dryRun opts) result)]
         (->js result)))))
 
 (defn apply-ops-offline
@@ -893,10 +915,11 @@
 (defn- sync-changes
   "Redo changes of Penpot's library sync (`generate-sync-file-changes`, as
   the editor does after a library change or when accepting library updates)
-  of `file-id` from `library-id`, for `asset-type` (nil: all)."
-  [libraries file-id library-id asset-type]
+  of `file-id` from `library-id`, for `asset-type` (nil: all) and
+  `asset-id` (nil: all of that type)."
+  [libraries file-id library-id asset-type asset-id]
   (vec (:redo-changes
-        (cll/generate-sync-file-changes (pcb/empty-changes nil) nil asset-type file-id nil
+        (cll/generate-sync-file-changes (pcb/empty-changes nil) nil asset-type file-id asset-id
                                         library-id libraries file-id))))
 
 (defn- relayout!
@@ -922,18 +945,18 @@
 
 (defn- sync-file!
   "Syncs `file` (with its current `:data`) from `library-id` for each of
-  `asset-types` (nil: everything) and lays out what changed. Resolves to
-  {:changes [...] :data data'}."
-  [ctx file libraries library-id asset-types variants]
+  `assets` ([asset-type asset-id], nil for all) and lays out what changed.
+  Resolves to {:changes [...] :data data'}."
+  [ctx file libraries library-id assets variants]
   (let [file-id (:id file)
         [data changes]
-        (reduce (fn [[data acc] asset-type]
+        (reduce (fn [[data acc] [asset-type asset-id]]
                   (let [libs    (assoc (into {} (map (juxt :id identity)) libraries)
                                        file-id (assoc file :data data))
-                        changes (sync-changes libs file-id library-id asset-type)]
+                        changes (sync-changes libs file-id library-id asset-type asset-id)]
                     [(cfc/process-changes data changes false) (into acc changes)]))
                 [(:data file) []]
-                asset-types)]
+                assets)]
     (if (empty? changes)
       (p/resolved {:changes [] :data data})
       (->> (relayout! ctx data changes variants
@@ -969,7 +992,7 @@
                                    _        (when-not (some (fn [lib] (= library-id (:id lib))) linked)
                                               (throw (ex-info "The library is not linked to the file" {})))
                                    {:keys [changes]} (sync-file! ctx file (into [(own-library file)] linked)
-                                                                 library-id [nil] variants)
+                                                                 library-id [[nil nil]] variants)
                                    saved    (save-changes! ctx file changes (.-dryRun opts)
                                                            {:linked true :synced true :changes (count changes)})
                                    ;; like the editor after accepting updates: no more
@@ -1005,7 +1028,7 @@
         file' (assoc file :data (:data lib))]
     (->> (if (empty? kinds)
            (p/resolved {:changes [] :data (:data lib)})
-           (sync-file! ctx file' [(own-library file')] (:id file) kinds variants))
+           (sync-file! ctx file' [(own-library file')] (:id file) (mapv (fn [k] [k nil]) kinds) variants))
          (p/fmap (fn [{:keys [changes data]}]
                    {:changes (into (:changes lib) changes)
                     :data data
@@ -1240,12 +1263,49 @@
                 :flows (vec (vals (:flows page)))
                 :objects (into {}
                                (map (fn [[id shape]]
-                                      [(str id) (select-keys shape [:type :name :parent-id :frame-id :shapes :fills :strokes
-                                                                    :content :selrect :layout :layout-flex-dir
-                                                                    :component-id :component-file :component-root
-                                                                    :main-instance :shape-ref :touched :interactions
-                                                                    :applied-tokens])]))
+                                      [(str id) (dissoc shape :points :transform :transform-inverse :position-data)]))
                                (:objects page))}))))
+
+(defn- components-js
+  [data]
+  (->js (into {}
+              (map (fn [[id c]]
+                     [(str id) (d/without-nils
+                                {:name (library/full-name c)
+                                 :mainInstanceId (:main-instance-id c)
+                                 :mainInstancePage (:main-instance-page c)
+                                 :variantId (:variant-id c)
+                                 :variantProperties (:variant-properties c)
+                                 :annotation (:annotation c)
+                                 :deleted (:deleted c)})]))
+              (:components data))))
+
+(defn edit-file-offline
+  "JS entry (tests). edit_page on an in-memory file (from libraryOffline or
+  an earlier call), with the update of the copies of changed mains.
+
+  opts: {pageId? (id or name; default the first page), images?, libraries?
+  (other in-memory files, linked), dryRun?}
+  Resolves to {file, result, changes, pages, components}."
+  [^js file ^js ops ^js opts]
+  (guard
+   #(let [ctx     {:images (js-images (some-> opts .-images))}
+          data    (:data file)
+          page    (some-> opts .-pageId)
+          page-id (if page
+                    (:id (move/resolve-page data page "pageId" "Page"))
+                    (first (:pages data)))
+          libs    (vec (some-> opts .-libraries))]
+      (p/let [_ (ensure-module!)
+              {:keys [changes result]} (edit-file! ctx file page-id (ops->clj ops) [] libs
+                                                   (tokens/active-tokens data data))]
+        ;; verify? true: the same schema checks as the backend
+        (let [data (cfc/process-changes data (vec changes) true)]
+          #js {:file (assoc file :data data)
+               :result (->js result)
+               :changes (->js (mapv (fn [c] (select-keys c [:type :id :page-id])) changes))
+               :pages (file-pages-js data)
+               :components (components-js data)})))))
 
 (defn move-shapes-offline
   "JS entry (tests). move_shapes on in-memory files from libraryOffline.
@@ -1280,14 +1340,7 @@
                             :changes (->js (mapv (fn [c] (select-keys c [:type :id :page-id])) changes))
                             :valid true
                             :pages (file-pages-js data)
-                            :components (->js (into {}
-                                                    (map (fn [[id c]]
-                                                           [(str id) (d/without-nils
-                                                                      {:name (library/full-name c)
-                                                                       :mainInstanceId (:main-instance-id c)
-                                                                       :mainInstancePage (:main-instance-page c)
-                                                                       :deleted (:deleted c)})]))
-                                                    (:components data)))})))))))
+                            :components (components-js data)})))))))
 
 (defn render-file-offline
   "JS entry (tests). Renders shape `objectId` of an in-memory file (any page)
