@@ -52,6 +52,7 @@
    [app.common.types.modifiers :as ctm]
    [app.common.types.shape :as cts]
    [app.common.types.shape.layout :as ctl]
+   [app.common.types.path :as path]
    [app.common.types.text :as txt]
    [app.common.types.variant :as ctv]
    [app.common.uuid :as uuid]
@@ -62,7 +63,8 @@
    [penpot-mcp.props :as props]
    [penpot-mcp.tokens :as tokens]
    [penpot-mcp.touched :as touched]
-   [penpot-mcp.util :as u]))
+   [penpot-mcp.util :as u]
+   [penpot-mcp.vector :as vector]))
 
 ;; --- constants mirrored from the workspace
 
@@ -211,10 +213,63 @@
 (defn- image-fit
   "The fit of the image fill an op sets, if any."
   [op]
-  (let [fill (:fill op)]
-    (cond
-      (and (map? fill) (some? (:image fill))) (or (->kw (:fit fill) image-fits "fit") :cover)
-      (some? (:image op)) (or (->kw (:fit op) image-fits "fit") :cover))))
+  (let [fill  (:fill op)
+        fills (if (sequential? fill) fill [fill])]
+    (or (some (fn [f] (when (and (map? f) (some? (:image f))) (or (->kw (:fit f) image-fits "fit") :cover))) fills)
+        (when (some? (:image op)) (or (->kw (:fit op) image-fits "fit") :cover)))))
+
+(defn- round4 [v] (/ (js/Math.round (* v 10000)) 10000))
+
+(defn- gradient!
+  "A gradient from {type: linear|radial, angle (CSS degrees, 180 = top to
+  bottom), start/end ([x, y] as fractions of the shape), stops: [{color,
+  opacity, offset}] or ["#rrggbb", …] (evenly spread)}."
+  [g field]
+  (when-not (map? g)
+    (error! (str field " must be an object like {"type": "linear", "angle": 90, "stops": ["#3366ff", "#00aa88"]}")
+            {:field field}))
+  (props/check-keys! g [:type :angle :stops :start :end :width] (str "in \"" field "\""))
+  (let [type  (or (->kw (:type g) #{:linear :radial} (str field ".type")) :linear)
+        stops (:stops g)
+        _     (when-not (and (sequential? stops) (>= (count stops) 2))
+                (error! (str field ".stops needs two stops or more, e.g. [\"#3366ff\", \"#00aa88\"] or "
+                             "[{\"color\": \"#3366ff\", \"offset\": 0}, {\"color\": \"#00aa88\", \"offset\": 1}]")
+                        {:field (str field ".stops")}))
+        n     (count stops)
+        stops (into []
+                    (map-indexed
+                     (fn [i st]
+                       (let [st (if (string? st) {:color st} st)]
+                         (when-not (map? st) (error! "Each gradient stop is \"#rrggbb\" or {color, opacity, offset}" {:field field}))
+                         (props/check-keys! st [:color :opacity :offset] "in a gradient stop")
+                         {:color (color! (:color st) (str field ".stops.color"))
+                          :opacity (or (number! (:opacity st) (str field ".stops.opacity") :min 0 :max 1) 1)
+                          :offset (or (number! (:offset st) (str field ".stops.offset") :min 0 :max 1)
+                                      (round4 (/ i (dec n))))})))
+                    stops)
+        point (fn [v k]
+                (when (some? v)
+                  (if (and (sequential? v) (= 2 (count v)) (every? number? v))
+                    v
+                    (error! (str field "." k " must be [x, y] (fractions of the shape: [0, 0] is the top left)")
+                            {:field (str field "." k)}))))
+        start (point (:start g) "start")
+        end   (point (:end g) "end")
+        _     (when (not= (some? start) (some? end))
+                (error! (str field " needs both start and end (or an angle)") {:field field}))
+        _     (when (and start (some? (:angle g)))
+                (error! (str field ": give either angle or start/end") {:field field}))
+        [sx sy ex ey]
+        (cond
+          start (concat start end)
+          (= type :radial) [0.5 0.5 0.5 1]
+          :else (let [a  (* (or (number! (:angle g) (str field ".angle")) 180) (/ js/Math.PI 180))
+                      dx (/ (js/Math.sin a) 2)
+                      dy (/ (- (js/Math.cos a)) 2)]
+                  (mapv round4 [(- 0.5 dx) (- 0.5 dy) (+ 0.5 dx) (+ 0.5 dy)])))]
+    {:type type :start-x sx :start-y sy :end-x ex :end-y ey
+     :width (or (number! (:width g) (str field ".width") :min 0) 1)
+     :stops stops}))
 
 (defn- color-fill
   [state color opacity field]
@@ -228,9 +283,35 @@
       :fill-color-ref-id ref-id
       :fill-color-ref-file ref-file})))
 
+(defn- one-fill
+  [state fill fill-opacity field]
+  (cond
+    (string? fill)
+    (color-fill state fill fill-opacity field)
+
+    (map? fill)
+    (let [{:keys [color image fit opacity gradient]} fill
+          opacity (if (some? opacity) opacity fill-opacity)]
+      (when (> (count (filter some? [color image gradient])) 1)
+        (error! (str field " takes one of \"color\", \"image\" or \"gradient\"") {:field field}))
+      (when (and (some? fit) (nil? image))
+        (error! "\"fit\" only applies to image fills" {:field (str field ".fit")}))
+      (cond
+        (some? image)    (image-fill state image fit opacity (str field ".image"))
+        (some? gradient) {:fill-color-gradient (gradient! gradient (str field ".gradient"))
+                          :fill-opacity (or (number! opacity "fill opacity" :min 0 :max 1) 1)}
+        (some? color)    (color-fill state color opacity (str field ".color"))
+        :else            (error! (str field " needs \"color\", \"gradient\" or \"image\"") {:field field})))
+
+    :else
+    (error! (str "Invalid " field ": " (pr-str fill)
+                 " (use \"#rrggbb\", a library color name, \"none\", {\"gradient\": …} or {\"image\": <media id>})")
+            {:field field :value fill})))
+
 (defn- fills-attrs
-  "`fill`: \"#rrggbb\", a library color name, \"none\", {\"color\", \"opacity\"}
-  or {\"image\", \"fit\", \"opacity\"}; `fillOpacity` applies to it."
+  "`fill`: \"#rrggbb\", a library color name, \"none\", {\"color\", \"opacity\"},
+  {\"gradient\": …}, {\"image\", \"fit\", \"opacity\"}, or a list of those (the
+  first on top); `fillOpacity` applies to a single fill."
   [state op]
   (let [{:keys [fill fillOpacity]} op]
     (cond
@@ -240,31 +321,13 @@
          (or (nil? fill) (= "none" fill))
          []
 
-         (string? fill)
-         [(color-fill state fill fillOpacity "fill")]
-
-         (map? fill)
-         (let [{:keys [color image fit opacity]} fill
-               opacity (if (some? opacity) opacity fillOpacity)]
-           (cond
-             (and (some? image) (some? color))
-             (error! "fill takes either \"color\" or \"image\", not both" {:field "fill"})
-
-             (some? image)
-             [(image-fill state image fit opacity "fill.image")]
-
-             (some? color)
-             (do (when (some? fit)
-                   (error! "\"fit\" only applies to image fills" {:field "fill.fit"}))
-                 [(color-fill state color opacity "fill.color")])
-
-             :else
-             (error! "fill needs \"color\" or \"image\"" {:field "fill"})))
+         (sequential? fill)
+         (do (when (some? fillOpacity)
+               (error! "fillOpacity applies to a single fill: give each fill its own opacity" {:field "fillOpacity"}))
+             (into [] (map-indexed (fn [i f] (one-fill state f nil (str "fill[" i "]")))) fill))
 
          :else
-         (error! (str "Invalid fill: " (pr-str fill)
-                      " (use \"#rrggbb\", \"none\" or {\"image\": <media id>, \"fit\": \"cover\"})")
-                 {:field "fill" :value fill}))}
+         [(one-fill state fill fillOpacity "fill")])}
 
       (some? fillOpacity)
       (error! "fillOpacity needs a fill in the same op, e.g. \"fill\": \"#3366ff\", \"fillOpacity\": 0.5"
@@ -280,23 +343,27 @@
          []
 
          (or (string? stroke) (map? stroke))
-         (let [{:keys [color width align opacity]} (if (string? stroke) {:color stroke} stroke)
-               {c :color lib-opacity :opacity :keys [ref-id ref-file]} (paint state color "stroke.color")]
+         (let [{:keys [color width align opacity gradient style]} (if (string? stroke) {:color stroke} stroke)
+               _ (when (and (some? gradient) (some? color))
+                   (error! "stroke takes either \"color\" or \"gradient\"" {:field "stroke"}))
+               {c :color lib-opacity :opacity :keys [ref-id ref-file]}
+               (if (some? gradient) {} (paint state (or color "#000000") "stroke.color"))]
            (when (and ref-id (some? opacity))
              (error! "A library color sets its own opacity: remove stroke.opacity or use a #rrggbb color"
                      {:field "stroke.opacity"}))
            [(d/without-nils
              {:stroke-color c
+              :stroke-color-gradient (when (some? gradient) (gradient! gradient "stroke.gradient"))
               :stroke-opacity (or (number! opacity "stroke.opacity" :min 0 :max 1) lib-opacity 1)
               :stroke-color-ref-id ref-id
               :stroke-color-ref-file ref-file
               :stroke-width (or (number! width "stroke.width" :min 0) 1)
-              :stroke-style :solid
+              :stroke-style (or (->kw style #{:solid :dotted :dashed :mixed} "stroke.style") :solid)
               :stroke-alignment (or (->kw align #{:inner :center :outer} "stroke.align") :inner)})])
 
          :else
          (error! (str "Invalid stroke: " (pr-str stroke)
-                      " (use \"#rrggbb\", \"none\" or {\"color\", \"width\", \"align\"})")
+                      " (use \"#rrggbb\", \"none\" or {\"color\", \"width\", \"align\", \"style\"})")
                  {:field "stroke" :value stroke}))})))
 
 (defn- radius-attrs
@@ -305,37 +372,135 @@
     (let [[r1 r2 r3 r4] (four-sides (or (:radius op) 0) "radius")]
       {:r1 r1 :r2 r2 :r3 r3 :r4 r4})))
 
+(def ^:private shadow-props [:style :x :y :blur :spread :color :opacity :visible])
+
+(defn- shadow-attrs
+  "`shadow`: {style: drop|inner, x, y, blur, spread, color, opacity,
+  visible} (defaults: drop, 4, 4, 4, 0, #000000 at 0.2), a list of them, or
+  \"none\"."
+  [state op]
+  (when (contains? op :shadow)
+    (let [v     (:shadow op)
+          items (cond
+                  (or (nil? v) (false? v) (= "none" v)) []
+                  (map? v) [v]
+                  (sequential? v) v
+                  :else (error! "shadow must be {style, x, y, blur, spread, color, opacity}, a list of them, or \"none\""
+                                {:field "shadow" :value v}))]
+      {:shadow
+       (mapv (fn [sh]
+               (when-not (map? sh)
+                 (error! "Each shadow is an object like {\"y\": 2, \"blur\": 8, \"color\": \"#000000\", \"opacity\": 0.15}"
+                         {:field "shadow"}))
+               (props/check-keys! sh shadow-props "in \"shadow\"")
+               (let [{c :color lib-opacity :opacity :keys [ref-id ref-file]} (paint state (or (:color sh) "#000000") "shadow.color")]
+                 {:id (uuid/next)
+                  :style (or (->kw (:style sh) #{:drop-shadow :inner-shadow} "shadow.style"
+                                   {:drop :drop-shadow :inner :inner-shadow})
+                             :drop-shadow)
+                  :offset-x (or (number! (:x sh) "shadow.x") 4)
+                  :offset-y (or (number! (:y sh) "shadow.y") 4)
+                  :blur (or (number! (:blur sh) "shadow.blur" :min 0) 4)
+                  :spread (or (number! (:spread sh) "shadow.spread") 0)
+                  :hidden (false? (bool! (:visible sh) "shadow.visible"))
+                  :color (d/without-nils
+                          {:color c
+                           :opacity (or (number! (:opacity sh) "shadow.opacity" :min 0 :max 1) lib-opacity 0.2)
+                           :ref-id ref-id
+                           :ref-file ref-file})}))
+             items)})))
+
+(defn- blur-value
+  [v field type]
+  (if (or (nil? v) (false? v) (= "none" v) (and (number? v) (zero? v)))
+    ::none
+    (do (when (map? v) (props/check-keys! v [:value] (str "in \"" field "\"")))
+        {:id (uuid/next) :type type :value (number! (if (map? v) (:value v) v) field :min 0) :hidden false})))
+
+(defn- effect-attrs
+  "`shadow`, `blur` (layer blur radius), `backgroundBlur` and `blendMode`."
+  [state op]
+  (merge (shadow-attrs state op)
+         (when (contains? op :blur) {:blur (blur-value (:blur op) "blur" :layer-blur)})
+         (when (contains? op :backgroundBlur)
+           {:background-blur (blur-value (:backgroundBlur op) "backgroundBlur" :background-blur)})
+         (when (contains? op :blendMode)
+           {:blend-mode (or (->kw (:blendMode op) cts/blend-modes "blendMode") :normal)})))
+
+(defn- apply-attrs
+  "`shape` with `attrs`; ::none removes an attr."
+  [shape attrs]
+  (reduce-kv (fn [s k v] (if (= ::none v) (dissoc s k) (assoc s k v))) shape attrs))
+
+(defn- track!
+  "A grid track: 100 or \"100px\" (fixed), \"1fr\" (flex), \"50%\", \"auto\", or
+  {type, value}."
+  [v field]
+  (let [bad #(error! (str "Invalid " field " track " (pr-str v)
+                          ": use 100 (px), \"1fr\", \"50%\", \"auto\" or {\"type\": \"flex\", \"value\": 1}")
+                     {:field field :value v})]
+    (cond
+      (number? v) {:type :fixed :value (number! v field :min 0)}
+      (map? v) (do (props/check-keys! v [:type :value] (str "in a " field " track"))
+                   (let [t (->kw (:type v) ctl/grid-track-types (str field ".type") {:fr :flex :px :fixed})]
+                     (d/without-nils {:type (or t (bad)) :value (when-not (= t :auto) (or (number! (:value v) field :min 0) 1))})))
+      (string? v) (let [v' (str/trim (str/lower v))]
+                    (cond
+                      (= "auto" v') {:type :auto}
+                      (re-matches #"^[0-9.]+fr$" v') {:type :flex :value (js/parseFloat v')}
+                      (re-matches #"^[0-9.]+%$" v') {:type :percent :value (js/parseFloat v')}
+                      (re-matches #"^[0-9.]+(px)?$" v') {:type :fixed :value (js/parseFloat v')}
+                      :else (bad)))
+      :else (bad))))
+
+(defn- tracks!
+  [v field]
+  (cond
+    (number? v) (vec (repeat (max 0 (js/Math.floor v)) ctl/default-track-value))
+    (sequential? v) (mapv #(track! % field) v)
+    :else (error! (str field " must be a list of tracks like [\"1fr\", \"1fr\", 240] or a count") {:field field})))
+
 (defn- layout-attrs
-  "Flex layout attrs from `layout` ({type direction gap padding alignItems ...}),
-  or ::remove for `false` / {type: \"none\"}."
+  "Layout attrs from `layout` ({type: flex|grid, direction, gap, padding,
+  alignItems, …; grid: columns, rows, justifyItems}), or ::remove for
+  `false` / {type: \"none\"}."
   [layout]
   (cond
     (nil? layout) nil
     (or (false? layout) (= "none" layout) (and (map? layout) (= "none" (:type layout)))) ::remove
     (or (true? layout) (= "flex" layout)) (layout-attrs {})
+    (= "grid" layout) (layout-attrs {:type "grid"})
     (not (map? layout))
-    (error! (str "Invalid layout: " (pr-str layout) " (use {\"type\": \"flex\", ...} or false)")
+    (error! (str "Invalid layout: " (pr-str layout) " (use {\"type\": \"flex\", ...}, {\"type\": \"grid\", ...} or false)")
             {:field "layout" :value layout})
     :else
-    (let [{:keys [type direction gap rowGap columnGap padding alignItems
-                  justifyContent alignContent wrap]} layout
-          _ (when-not (contains? #{nil "flex"} type)
-              (error! (str "Invalid layout.type " (pr-str type) ": only flex layout is supported for now")
-                      {:field "layout.type" :value type}))
+    (let [{:keys [type direction gap rowGap columnGap padding alignItems justifyItems
+                  justifyContent alignContent wrap columns rows]} layout
+          kind    (or (->kw type #{:flex :grid} "layout.type") :flex)
+          grid?   (= kind :grid)
+          _       (when (and (not grid?) (some #(contains? layout %) [:columns :rows :justifyItems]))
+                    (error! "columns, rows and justifyItems are grid layout properties: set \"type\": \"grid\""
+                            {:field "layout"}))
+          _       (when (and grid? (contains? layout :wrap))
+                    (error! "wrap is a flex layout property (a grid places its children in cells)" {:field "layout.wrap"}))
           [p1 p2 p3 p4] (when (some? padding) (four-sides padding "layout.padding"))
           justify #{:start :center :end :space-between :space-around :space-evenly :stretch}]
       (d/without-nils
-       {:layout :flex
-        :layout-flex-dir (->kw direction #{:row :row-reverse :column :column-reverse} "layout.direction")
+       {:layout kind
+        :layout-flex-dir (when-not grid? (->kw direction #{:row :row-reverse :column :column-reverse} "layout.direction"))
+        :layout-grid-dir (when grid? (->kw direction #{:row :column} "layout.direction"))
         :layout-gap (when (or (some? gap) (some? rowGap) (some? columnGap))
                       {:row-gap (or (number! rowGap "layout.rowGap" :min 0) (number! gap "layout.gap" :min 0) 0)
                        :column-gap (or (number! columnGap "layout.columnGap" :min 0) (number! gap "layout.gap" :min 0) 0)})
         :layout-padding (when p1 {:p1 p1 :p2 p2 :p3 p3 :p4 p4})
         :layout-padding-type (when p1 (if (and (= p1 p3) (= p2 p4)) :simple :multiple))
         :layout-align-items (->kw alignItems #{:start :end :center :stretch} "layout.alignItems")
+        :layout-justify-items (when grid? (->kw justifyItems #{:start :end :center :stretch} "layout.justifyItems"))
         :layout-justify-content (->kw justifyContent justify "layout.justifyContent")
         :layout-align-content (->kw alignContent justify "layout.alignContent")
-        :layout-wrap-type (when (some? (bool! wrap "layout.wrap")) (if wrap :wrap :nowrap))}))))
+        :layout-wrap-type (when (some? (bool! wrap "layout.wrap")) (if wrap :wrap :nowrap))
+        ::columns (some-> columns (tracks! "layout.columns"))
+        ::rows (some-> rows (tracks! "layout.rows"))}))))
 
 (defn- sizing-attrs
   [sizing]
@@ -350,6 +515,64 @@
     :else
     (error! (str "Invalid sizing: " (pr-str sizing) " (use {\"h\": \"fix|fill|hug\", \"v\": \"fix|fill|hug\"})")
             {:field "sizing" :value sizing})))
+
+(defn- opt
+  "Attr `k` from prop `p` of `op` with `f`; null removes it (::none)."
+  [op p k f]
+  (when (contains? op p)
+    (let [v (get op p)]
+      {k (if (nil? v) ::none (f v))})))
+
+(defn- constraints-attrs
+  [c]
+  (when (some? c)
+    (when-not (map? c)
+      (error! "constraints must be like {\"h\": \"leftright\", \"v\": \"top\"}" {:field "constraints"}))
+    (props/check-keys! c [:h :v] "in \"constraints\"")
+    (d/without-nils
+     {:constraints-h (->kw (:h c) cts/horizontal-constraint-types "constraints.h" {:left-right :leftright :stretch :leftright})
+      :constraints-v (->kw (:v c) cts/vertical-constraint-types "constraints.v" {:top-bottom :topbottom :stretch :topbottom})})))
+
+(defn- item-attrs
+  "Options of a layout child (margin, min/max sizes, alignSelf, absolute,
+  zIndex) and constraints (how a shape follows its board's resizes outside
+  layouts)."
+  [op]
+  (merge
+   (when (contains? op :margin)
+     (if (nil? (:margin op))
+       {:layout-item-margin ::none :layout-item-margin-type ::none}
+       (let [[m1 m2 m3 m4] (four-sides (:margin op) "margin")]
+         {:layout-item-margin {:m1 m1 :m2 m2 :m3 m3 :m4 m4}
+          :layout-item-margin-type (if (and (= m1 m3) (= m2 m4)) :simple :multiple)})))
+   (opt op :minWidth :layout-item-min-w #(number! % "minWidth" :min 0))
+   (opt op :maxWidth :layout-item-max-w #(number! % "maxWidth" :min 0))
+   (opt op :minHeight :layout-item-min-h #(number! % "minHeight" :min 0))
+   (opt op :maxHeight :layout-item-max-h #(number! % "maxHeight" :min 0))
+   (opt op :alignSelf :layout-item-align-self
+        #(if (= "auto" %) ::none (->kw % ctl/item-align-self-types "alignSelf")))
+   (opt op :absolute :layout-item-absolute #(bool! % "absolute"))
+   (opt op :zIndex :layout-item-z-index #(number! % "zIndex"))
+   (constraints-attrs (:constraints op))))
+
+(defn- cell!
+  "A grid cell for a child: {row, column (from 1), rowSpan, columnSpan,
+  alignSelf, justifySelf}."
+  [c]
+  (when-not (map? c)
+    (error! "cell must be like {\"row\": 1, \"column\": 2, \"columnSpan\": 2}" {:field "cell"}))
+  (props/check-keys! c [:row :column :rowSpan :columnSpan :alignSelf :justifySelf] "in \"cell\"")
+  (let [n (fn [k] (when (some? (get c k))
+                    (let [v (get c k)]
+                      (if (and (integer? v) (>= v 1) (<= v 100))
+                        v
+                        (error! (str "cell." (name k) " must be a whole number from 1") {:field (str "cell." (name k))})))))]
+    (when-not (and (some? (:row c)) (some? (:column c)))
+      (error! "cell needs \"row\" and \"column\" (the first row and column are 1)" {:field "cell"}))
+    {:row (n :row) :column (n :column)
+     :row-span (or (n :rowSpan) 1) :column-span (or (n :columnSpan) 1)
+     :align-self (->kw (:alignSelf c) ctl/grid-cell-align-self-types "cell.alignSelf")
+     :justify-self (->kw (:justifySelf c) ctl/grid-cell-justify-self-types "cell.justifySelf")}))
 
 (def ^:private typography-props
   [:fontFamily :fontWeight :fontStyle :fontSize :lineHeight :letterSpacing :textTransform])
@@ -376,7 +599,7 @@
   font prop without one detaches the text from its typography, as in the
   editor."
   [state op base]
-  (let [{:keys [fontSize textAlign lineHeight letterSpacing textTransform fill]} op
+  (let [{:keys [fontSize textAlign lineHeight letterSpacing textTransform textDecoration fill]} op
         ;; on text shapes `fill` means the text color
         _ (when (and (some? fill) (not (string? fill)))
             (error! "On a text, fill is the text color: use \"#rrggbb\" or a library color name (image fills are not supported on texts)"
@@ -398,6 +621,9 @@
           :text-transform (some-> (->kw textTransform #{:none :uppercase :lowercase :capitalize} "textTransform") name)})))
      (d/without-nils
       {:text-align (some-> (->kw textAlign #{:left :center :right :justify} "textAlign") name)
+       :text-decoration (some-> (->kw textDecoration #{:none :underline :line-through} "textDecoration"
+                                      {:strikethrough :line-through})
+                                name)
        :fills (when paint*
                 [(d/without-nils
                   {:fill-color (:color paint*)
@@ -407,19 +633,63 @@
 
 (defn- text-op?
   [op]
-  (some #(contains? op %) [:text :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill
-                           :textAlign :lineHeight :letterSpacing :textTransform :typography]))
+  (some #(contains? op %) [:text :spans :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill
+                           :textAlign :lineHeight :letterSpacing :textTransform :textDecoration
+                           :verticalAlign :typography]))
+
+(def ^:private span-props
+  [:text :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :lineHeight
+   :letterSpacing :textTransform :textDecoration])
+
+(defn- spans-content
+  "Text content from `spans` ([{text, …styles}]): each span is styled from
+  the text's `styles` and its own props; a \"\\n\" starts a new paragraph."
+  [state spans styles]
+  (when-not (and (sequential? spans) (seq spans) (every? map? spans))
+    (error! "spans must be a list like [{\"text\": \"Hello \"}, {\"text\": \"world\", \"fontWeight\": \"700\"}]"
+            {:field "spans"}))
+  (let [nodes (mapv (fn [sp]
+                      (props/check-keys! sp span-props "in a span")
+                      (when-not (string? (:text sp)) (error! "Each span needs \"text\"" {:field "spans"}))
+                      [(:text sp) (text-styles state sp styles)])
+                    spans)
+        paras (reduce (fn [paras [text style]]
+                        (let [[first-part & more] (vec (.split text "\n"))]
+                          (reduce (fn [paras part] (conj paras [[part style]]))
+                                  (update paras (dec (count paras)) conj [first-part style])
+                                  more)))
+                      [[]]
+                      nodes)
+        node  (fn [[text style]] (merge txt/default-text-attrs (select-keys style txt/text-node-attrs) {:text text}))]
+    {:type "root"
+     :children
+     [{:type "paragraph-set"
+       :children
+       (mapv (fn [para]
+               (let [kept (filterv #(seq (first %)) para)
+                     kept (if (seq kept) kept [(first para)])]
+                 (merge txt/default-text-attrs
+                        (select-keys (second (first kept)) txt/text-all-attrs)
+                        {:type "paragraph" :children (mapv node kept)})))
+             paras)}]}))
 
 (defn- text-content
   "New text content for `op`, keeping the current text and styles of `content`
   where the op doesn't override them."
   [state content op]
+  (when (and (contains? op :text) (contains? op :spans))
+    (error! "Give either \"text\" or \"spans\"" {:field "spans"}))
   (let [base   (first (txt/node-seq txt/is-text-node? content))
-        styles (text-styles state op (or base {:fills [{:fill-color "#000000" :fill-opacity 1}]}))
-        text   (if (contains? op :text)
-                 (str (:text op))
-                 (or (some-> content txt/content->text) ""))]
-    (txt/change-text nil text styles)))
+        styles (text-styles state (dissoc op :spans) (or base {:fills [{:fill-color "#000000" :fill-opacity 1}]}))
+        valign (or (some-> (->kw (:verticalAlign op) #{:top :center :bottom} "verticalAlign") name)
+                   (:vertical-align content))
+        new    (if (contains? op :spans)
+                 (spans-content state (:spans op) styles)
+                 (txt/change-text nil (if (contains? op :text)
+                                        (str (:text op))
+                                        (or (some-> content txt/content->text) ""))
+                                  styles))]
+    (cond-> new valign (assoc :vertical-align valign))))
 
 ;; --- shape attrs shared by create and update
 
@@ -430,6 +700,8 @@
   (merge
    (when-not (= type :text) (fills-attrs state op))
    (stroke-attrs state op)
+   (effect-attrs state op)
+   (item-attrs op)
    (when (#{:rect :frame} type) (radius-attrs op))
    (sizing-attrs (:sizing op))
    (d/without-nils
@@ -440,12 +712,48 @@
      :grow-type (when (= type :text)
                   (->kw (:growType op) #{:auto-width :auto-height :fixed} "growType"))})))
 
+(def ^:private grid-only-keys
+  [:layout-grid-dir :layout-justify-items :layout-grid-rows :layout-grid-columns :layout-grid-cells])
+
+(def ^:private flex-only-keys [:layout-flex-dir :layout-wrap-type])
+
+(def ^:private initial-grid-layout
+  {:layout                 :grid
+   :layout-grid-dir        :row
+   :layout-gap-type        :multiple
+   :layout-gap             {:row-gap 0 :column-gap 0}
+   :layout-align-items     :start
+   :layout-justify-items   :start
+   :layout-align-content   :stretch
+   :layout-justify-content :stretch
+   :layout-padding-type    :simple
+   :layout-padding         {:p1 0 :p2 0 :p3 0 :p4 0}
+   :layout-grid-cells      {}
+   :layout-grid-rows       []
+   :layout-grid-columns    []})
+
 (defn- with-layout
+  "`shape` with layout attrs from `layout-attrs`. New grid tracks rebuild
+  the grid's cells; the children are placed in them again afterwards."
   [shape layout]
-  (case layout
-    nil shape
-    ::remove (apply dissoc shape layout-keys)
-    (merge (if (ctl/flex-layout? shape) shape (merge shape initial-flex-layout)) layout)))
+  (cond
+    (nil? layout) shape
+    (= ::remove layout) (apply dissoc shape (concat layout-keys grid-only-keys))
+
+    (= :grid (:layout layout))
+    (let [base  (if (ctl/grid-layout? shape) shape (merge (apply dissoc shape flex-only-keys) initial-grid-layout))
+          shape (merge base (dissoc layout ::rows ::columns))]
+      (if (or (::rows layout) (::columns layout))
+        (let [rows (or (::rows layout) (:layout-grid-rows shape))
+              cols (or (::columns layout) (:layout-grid-columns shape))
+              grid (assoc shape :layout-grid-rows [] :layout-grid-columns [] :layout-grid-cells {})
+              grid (reduce (fn [g t] (ctl/add-grid-column g t)) grid cols)]
+          (reduce (fn [g t] (ctl/add-grid-row g t)) grid rows))
+        shape))
+
+    :else
+    (merge (if (ctl/flex-layout? shape) shape (merge (apply dissoc shape grid-only-keys) initial-flex-layout))
+           layout)))
 
 ;; --- design tokens on shapes
 
@@ -502,7 +810,8 @@
 
 (def ^:private shape-types
   {"frame" :frame "board" :frame "rect" :rect "rectangle" :rect
-   "ellipse" :circle "circle" :circle "text" :text "image" :image})
+   "ellipse" :circle "circle" :circle "text" :text "image" :image
+   "svg" :svg "path" :path})
 
 (def ^:private default-names
   {:frame "Board" :rect "Rectangle" :circle "Ellipse" :text "Text" :image "Image"})
@@ -546,16 +855,103 @@
       (and parent-id (ctl/any-layout? objects parent-id))
       (update :reflow conj parent-id))))
 
+(defn- parent-of!
+  "[parent-id parent frame-id] for a new shape in `parent` (id or ref, nil
+  for the page root)."
+  [state objects parent]
+  (let [parent-id (or (resolve-id state parent "parent") uuid/zero)
+        shape     (or (get objects parent-id)
+                      (error! (str "Parent " parent-id " not found on this page") {:field "parent"}))]
+    (when-not (#{:frame :group} (:type shape))
+      (error! "Parent must be a board (frame) or a group" {:field "parent" :value parent}))
+    [parent-id shape (if (cfh/frame-shape? shape) parent-id (:frame-id shape))]))
+
+(defn- add-shapes
+  "Adds `root` (with `children`, already parented to it) to `parent`, like
+  op-create: at the end of a layout."
+  [state root children parent ref]
+  (let [id      (:id root)
+        changes (pcb/add-object (:changes state) root (when (ctl/any-layout? parent) {:index 0}))
+        changes (reduce #(pcb/add-object %1 %2) changes children)
+        changes (cond-> changes
+                  (seq children) (pcb/resize-parents (vec (reverse (cons id (map :id children))))))
+        state   (cond-> (assoc state :changes changes)
+                  (some? ref) (update :refs assoc (str ref) id)
+                  true (update :created conj id))]
+    (touch-layout-parent state (objects-of state) id)))
+
+(declare op-update)
+
+(defn- op-create-svg
+  "Imports SVG markup as editable vectors (a group of paths, rectangles,
+  ellipses…), like pasting an SVG in the editor. `width`/`height` scale it,
+  `color` paints every fill and stroke (icons)."
+  [state {:keys [parent ref x y] :as op}]
+  (props/check-shape-op! :create :svg op)
+  (let [objects (objects-of state)
+        [parent-id parent frame-id] (parent-of! state objects parent)
+        origin  (parent-origin objects parent-id)
+        [root children] (vector/svg-shapes (:svg op) (or (some-> (:name op) str) "Vector") objects frame-id parent-id
+                                           (+ (:x origin) (or (number! x "x") 0))
+                                           (+ (:y origin) (or (number! y "y") 0)))
+        paint*  (when (some? (:color op)) (paint state (:color op) "color"))
+        children (cond->> children paint* (mapv #(vector/recolor % paint*)))
+        state   (add-shapes state root children parent ref)
+        more    (dissoc op :op :type :ref :parent :svg :name :x :y :color)]
+    (if (seq more)
+      (op-update state (assoc more :op "update" :id (str (:id root))))
+      state)))
+
+(defn- path-stroke
+  "Paths take centered strokes (inner and outer only apply to closed
+  shapes): the default for `stroke` on a path."
+  [stroke]
+  (cond
+    (map? stroke) (merge {:align "center"} stroke)
+    (and (string? stroke) (not= "none" stroke)) {:color stroke :align "center"}
+    :else stroke))
+
+(defn- op-create-path
+  "A path from SVG path data `d`, in the parent's coordinates (like the
+  path of an SVG inside the board). `x`/`y` move its top-left there,
+  `width`/`height` scale it. Without fill or stroke it gets a 1px black
+  stroke, like a path drawn in the editor."
+  [state {:keys [parent ref] :as op}]
+  (props/check-shape-op! :create :path op)
+  (let [op      (cond-> op (contains? op :stroke) (update :stroke path-stroke))
+        [op applied] (with-token-props state op nil :path)
+        objects (objects-of state)
+        [parent-id parent frame-id] (parent-of! state objects parent)
+        origin  (parent-origin objects parent-id)
+        content (path/move-content (vector/path-content (:d op)) origin)
+        id      (uuid/next)
+        styled? (or (contains? op :fill) (contains? op :stroke))
+        shape   (-> (cts/setup-shape {:id id :type :path :name (or (some-> (:name op) str) "Path")
+                                      :content content :parent-id parent-id :frame-id frame-id
+                                      :fills []
+                                      :strokes (if styled?
+                                                 []
+                                                 [{:stroke-color "#000000" :stroke-opacity 1 :stroke-width 1
+                                                   :stroke-style :solid :stroke-alignment :center}])})
+                    (apply-attrs (prop-attrs state :path (dissoc op :x :y :width :height :sizing)))
+                    (cond-> (seq applied) (update-applied [] applied)))
+        state   (add-shapes state shape [] parent ref)
+        more    (select-keys op [:x :y :width :height :sizing])]
+    (if (seq more)
+      (op-update state (assoc more :op "update" :id (str id)))
+      state)))
+
 (defn- op-create
   [state {:keys [type parent ref x y] :as op}]
   (let [kind      (or (get shape-types (some-> type str str/lower))
-                      (error! (str "Invalid type " (pr-str type) ". Use frame, rect, ellipse, text or image")
+                      (error! (str "Invalid type " (pr-str type) ". Use frame, rect, ellipse, text, image, svg, path "
+                                   "or component")
                               {:field "type" :value type}))
         _         (props/check-shape-op! :create kind op)
         [op applied] (with-token-props state op nil (if (= kind :image) :rect kind))
+        objects   (objects-of state)
         image?    (= kind :image)
         type*     (if image? :rect kind)
-        objects   (objects-of state)
         parent-id (or (resolve-id state parent "parent") uuid/zero)
         parent    (or (get objects parent-id)
                       (error! (str "Parent " parent-id " not found on this page") {:field "parent"}))
@@ -589,8 +985,8 @@
                                 :frame-id frame-id}
                          text? (assoc :grow-type grow-type
                                       :content (text-content state nil op))))
-                      (merge (prop-attrs state type* (cond-> (dissoc op :growType)
-                                                       image? (dissoc :fillOpacity))))
+                      (apply-attrs (prop-attrs state type* (cond-> (dissoc op :growType)
+                                                             image? (dissoc :fillOpacity))))
                       (cond-> image? (assoc :fills [img-fill]))
                       (cond-> (= type* :frame) (with-layout (layout-attrs (:layout op))))
                       (cond-> (seq applied) (update-applied [] applied))
@@ -614,8 +1010,6 @@
   (->> (cfh/get-children-ids objects id)
        (keep #(get objects %))
        (filter cfh/text-shape?)))
-
-(declare op-update)
 
 (defn- op-instance
   "Creates a copy of a library component, like dragging it from the assets
@@ -665,7 +1059,8 @@
                     true (update :created conj id)
                     (ctl/any-layout? root) (update :reflow conj id))
         state     (touch-layout-parent state (objects-of state) id)
-        overrides (select-keys op [:name :width :height :sizing :visible :opacity])
+        overrides (select-keys op [:name :width :height :sizing :visible :opacity :margin :minWidth :maxWidth
+                                   :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints])
         state     (if (seq overrides) (op-update state (assoc overrides :op "update" :id (str id))) state)
         objects   (objects-of state)
         candidates (descendant-texts objects id)]
@@ -708,17 +1103,25 @@
         [op applied] (with-token-props state op shape type)
         text?   (= type :text)
         layout  (when (= type :frame) (layout-attrs (:layout op)))
+        op      (cond-> op (and (= type :path) (contains? op :stroke)) (update :stroke path-stroke))
         attrs   (prop-attrs state type op)
         fit     (image-fit op)
+        content (when (contains? op :d)
+                  (path/move-content (vector/path-content (:d op)) (parent-origin objects (:parent-id shape))))
+        tint    (when (contains? op :color) (paint state (:color op) "color"))
         update-fn (fn [shape]
-                    (cond-> (merge shape attrs)
+                    (cond-> (apply-attrs shape attrs)
                       (or (seq unapply) (seq applied)) (update-applied unapply applied)
                       (some? layout) (with-layout layout)
+                      (some? content) (path/update-geometry content)
                       (and text? (text-op? op)) (-> (assoc :content (text-content state (:content shape) op))
                                                     (dissoc :position-data))))
         changes (pcb/update-shapes (:changes state) [id] update-fn)
+        changes (cond-> changes
+                  tint (pcb/update-shapes (cfh/get-children-ids-with-self objects id) #(vector/recolor % tint)))
         modifs  (geometry-modifiers objects shape op)
         state   (cond-> (assoc state :changes changes)
+                  (some? content) (update :regroup conj id)
                   (and (contains? op :fill) (not= :contain fit)) (update :contain disj id)
                   (= :contain fit) (update :contain conj id)
                   (some? modifs) (update :modifs assoc id modifs)
@@ -737,7 +1140,8 @@
         changes (pcb/remove-objects (:changes state) ids)]
     (-> state
         (assoc :changes changes)
-        (update :deleted into ids))))
+        (update :deleted into ids)
+        (update :regroup conj (:parent-id (get objects id))))))
 
 (def ^:private library-change-types
   #{:add-component :mod-component :del-component :restore-component :purge-component
@@ -933,6 +1337,108 @@
         (update :link-reports (fnil conj [])
                 (assoc report :scope (if (= scope-id uuid/zero) "page" (str scope-id)))))))
 
+;; --- groups and boolean shapes
+
+(defn- shape-ids!
+  "Shapes `v` (a list of ids or refs) of the page."
+  [state v field]
+  (when-not (and (sequential? v) (seq v))
+    (error! (str field " must be a list of shape ids or refs") {:field field}))
+  (let [objects (objects-of state)]
+    (mapv (fn [x]
+            (let [id (resolve-id state x field)]
+              (when-not (contains? objects id) (error! (str "Shape " id " not found on this page") {:field field}))
+              id))
+          v)))
+
+(defn- check-not-in-copy!
+  [objects shapes what]
+  (when-let [s (d/seek #(ctn/has-any-copy-parent? objects %) shapes)]
+    (error! (str "Layers of a component copy can't be " what " (" (pr-str (:name s)) "): change the main component")
+            {:field "ids"}))
+  (when-let [s (d/seek ctk/is-variant? shapes)]
+    (error! (str "Variants can't be " what " (" (pr-str (:name s)) ")") {:field "ids"})))
+
+(defn- op-group
+  "Puts shapes in a new group, at the place of the top one (Ctrl+G)."
+  [state op]
+  (props/check-keys! op [:op :ids :name :ref] "for group")
+  (let [objects (objects-of state)
+        ids     (shape-ids! state (:ids op) "ids")
+        shapes  (->> ids (cfh/clean-loops objects) (cfh/order-by-indexed-shapes objects) reverse (mapv #(get objects %)))
+        _       (check-not-in-copy! objects shapes "grouped")
+        id      (uuid/next)
+        state   (second (run-sub state (fn [changes]
+                                         [nil (vector/group changes objects id shapes
+                                                            (or (some-> (:name op) str) "Group"))])))]
+    (-> state
+        (cond-> (some? (:ref op)) (update :refs assoc (str (:ref op)) id))
+        (update :created conj id)
+        (touch-layout-parent (objects-of state) id))))
+
+(defn- op-ungroup
+  "Moves the layers of a group, boolean shape or board to its parent and
+  removes it (Shift+G, or \"Remove board\" for a board)."
+  [state op]
+  (props/check-keys! op [:op :id] "for ungroup")
+  (let [objects (objects-of state)
+        shape   (shape! state (:id op) "id" "ungroup")
+        _       (when-not (#{:group :bool :frame} (:type shape))
+                  (error! "ungroup takes a group, a boolean shape or a board" {:field "id"}))
+        _       (when (or (ctk/instance-head? shape) (ctk/is-variant-container? shape))
+                  (error! "Components and variant sets can't be ungrouped (detach a copy first)" {:field "id"}))
+        _       (check-not-in-copy! objects [shape] "ungrouped")
+        kids    (vec (:shapes shape))
+        state   (second (run-sub state (fn [changes] [nil (vector/ungroup changes objects (:id shape))])))]
+    (-> state
+        (update :deleted conj (:id shape))
+        (update :relocated (fnil into []) kids)
+        (touch-layout-parent objects (:id shape)))))
+
+(defn- op-boolean
+  "Combines shapes into a boolean shape (union, difference, intersection
+  or exclude), like the boolean buttons of the toolbar. It takes its fill
+  and stroke from the top shape (the bottom one for a difference)."
+  [state op]
+  (props/check-keys! op [:op :ids :kind :name :ref] "for boolean")
+  (let [objects (objects-of state)
+        ids     (shape-ids! state (:ids op) "ids")
+        kind    (or (->kw (or (:kind op) "union") vector/bool-types "kind") :union)
+        shapes  (->> ids (cfh/clean-loops objects) (cfh/order-by-indexed-shapes objects) (mapv #(get objects %)))
+        _       (when (< (count shapes) 2) (error! "boolean needs at least two shapes" {:field "ids"}))
+        _       (when-let [f (d/seek cfh/frame-shape? shapes)]
+                  (error! (str "Boards can't be combined (" (pr-str (:name f)) "): use paths, rectangles, ellipses, "
+                               "groups or other boolean shapes")
+                          {:field "ids"}))
+        _       (when (some cfh/text-shape? shapes)
+                  (error! "Texts can't be combined into a boolean shape" {:field "ids"}))
+        _       (check-not-in-copy! objects shapes "combined")
+        id      (uuid/next)
+        state   (second (run-sub state (fn [changes]
+                                         [nil (vector/bool changes objects id kind
+                                                           (or (some-> (:name op) str) (str/capital (name kind)))
+                                                           shapes)])))]
+    (-> state
+        (cond-> (some? (:ref op)) (update :refs assoc (str (:ref op)) id))
+        (update :created conj id)
+        (touch-layout-parent (objects-of state) id))))
+
+(defn regroup
+  "Recomputes the groups and boolean shapes around the shapes the batch
+  changed (their box, and a boolean's path), like the workspace's
+  reg-objects after a transform."
+  [state]
+  (let [objects (objects-of state)
+        bool-or-group? #(#{:group :bool} (:type (get objects %)))
+        ids     (->> (concat (:created state) (:moved state) (:regroup state) (:relocated state))
+                     (filter #(contains? objects %))
+                     (filter #(some bool-or-group? (cons % (cfh/get-parent-ids objects %))))
+                     (distinct)
+                     (vec))]
+    (if (empty? ids)
+      state
+      (update state :changes pcb/resize-parents ids))))
+
 ;; --- components: annotations, variants, swap, detach, reset
 
 (declare touch)
@@ -1097,7 +1603,7 @@
         ids     (mapv #(:id (shape! state (:id %) "id" "Each variant")) variants)
         _       (when-not (apply distinct? ids) (error! "A shape is listed twice in variants" {:field "variants"}))
         props   (mapv (fn [v]
-                        (let [p (variant-props! (:properties v) "properties")]
+                        (let [p (when (some? (:properties v)) (variant-props! (:properties v) "properties"))]
                           (when (empty? p)
                             (error! "Each variant needs properties, e.g. {\"Type\": \"Primary\"}" {:field "properties"}))
                           p))
@@ -1358,6 +1864,19 @@
   [v]
   (and (string? v) (not (str/starts-with? v "#")) (not= "none" v)))
 
+(defn- op-colors
+  "The color values an op sets (fills, strokes, text colors, shadows, tints,
+  spans), to tell whether it uses library colors."
+  [op]
+  (let [fills  (let [f (:fill op)] (if (sequential? f) f [f]))
+        shadow (let [v (:shadow op)] (if (sequential? v) v [v]))
+        spans  (when (sequential? (:spans op)) (filter map? (:spans op)))]
+    (concat (map #(if (map? %) (:color %) %) fills)
+            [(:textColor op) (:color op)
+             (let [st (:stroke op)] (if (map? st) (:color st) st))]
+            (map #(when (map? %) (:color %)) shadow)
+            (mapcat (fn [sp] [(:textColor sp) (:fill sp)]) spans))))
+
 (defn needs-libraries?
   "True when `ops` use library assets (components, library colors or
   typographies), so the caller loads the linked libraries before `build`."
@@ -1369,19 +1888,66 @@
                (or (= "component" (some-> (:type op) str str/lower))
                    (contains? #{"linkassets" "swap" "detach" "resetoverrides"} (some-> (:op op) str str/lower))
                    (contains? op :typography)
-                   (color-name? (:fill op))
-                   (color-name? (:textColor op))
-                   (and (map? (:fill op)) (color-name? (:color (:fill op))))
-                   (color-name? (:stroke op))
-                   (and (map? (:stroke op)) (color-name? (:color (:stroke op)))))))
+                   (some #(and (map? %) (contains? % :typography)) (when (sequential? (:spans op)) (:spans op)))
+                   (some color-name? (op-colors op)))))
            ops))))
+
+(defn- place-cell
+  [state id cell]
+  (let [objects (objects-of state)
+        parent  (get objects (:parent-id (get objects id)))]
+    (when-not (ctl/grid-layout? parent)
+      (error! "cell applies to the children of a board with a grid layout" {:field "cell"}))
+    (update state :cells (fnil conj []) [id cell])))
+
+(defn- ensure-tracks
+  [grid rows cols]
+  (as-> grid g
+    (reduce (fn [g _] (ctl/add-grid-row g ctl/default-track-value)) g (range (count (:layout-grid-rows g)) rows))
+    (reduce (fn [g _] (ctl/add-grid-column g ctl/default-track-value)) g (range (count (:layout-grid-columns g)) cols))))
+
+(defn- place-grid-children
+  "Puts the children of the grid boards the batch touched in cells, like
+  the workspace after adding a child (`assign-cells`), and the shapes given
+  a `cell` in theirs (adding rows and columns when needed)."
+  [state]
+  (let [objects (objects-of state)
+        cells   (:cells state)
+        grids   (into #{}
+                      (filter #(ctl/grid-layout? objects %))
+                      (concat (:reflow state) (map (fn [[id]] (:parent-id (get objects id))) cells)))]
+    (if (empty? grids)
+      state
+      (let [changes (pcb/update-shapes
+                     (:changes state) (vec grids)
+                     (fn [grid objects]
+                       (reduce (fn [grid [id {:keys [row column row-span column-span align-self justify-self]}]]
+                                 (if (= (:id grid) (:parent-id (get objects id)))
+                                   (let [grid (-> (ensure-tracks grid (+ row row-span -1) (+ column column-span -1))
+                                                  (ctl/push-into-cell [id] row column))
+                                         grid (if (or (> row-span 1) (> column-span 1))
+                                                (ctl/resize-cell-area grid row column row column row-span column-span)
+                                                grid)
+                                         cell (ctl/get-cell-by-shape-id grid id)]
+                                     (-> grid
+                                         (cond-> cell
+                                           (update-in [:layout-grid-cells (:id cell)] merge
+                                                      (d/without-nils {:align-self align-self :justify-self justify-self})))
+                                         (ctl/assign-cells objects)))
+                                   grid))
+                               (ctl/assign-cells grid objects)
+                               cells))
+                     {:with-objects? true})]
+        (-> state
+            (assoc :changes (pcb/reorder-grid-children changes (vec grids)))
+            (update :reflow into grids))))))
 
 (defn start
   "Empty edit state for a page (see `build` for `opts`, plus `:file-id`)."
   [page-id objects {:keys [fonts media libraries file-id tokens]}]
   {:changes (-> (pcb/empty-changes :mcp page-id)
                 (pcb/with-objects objects))
-   :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{}
+   :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{} :regroup #{}
    :fonts (vec fonts)
    :media (or media {})
    :tokens (or tokens {})
@@ -1417,11 +1983,49 @@
   [ops]
   (when (sequential? ops)
     (into #{}
-          (keep (fn [op]
-                  (when (map? op)
-                    (let [image (or (:image op) (when (map? (:fill op)) (:image (:fill op))))]
-                      (when (string? image) (uuid/parse* image))))))
+          (comp (filter map?)
+                (mapcat (fn [op]
+                          (let [f (:fill op)]
+                            (cons (:image op) (map #(when (map? %) (:image %)) (if (sequential? f) f [f]))))))
+                (keep #(when (string? %) (uuid/parse* %))))
           ops)))
+
+(defn- apply-op
+  [state op]
+  (case (some-> (:op op) str str/lower)
+    "create" (case (some-> (:type op) str str/lower)
+               "component" (op-instance state op)
+               "svg" (op-create-svg state op)
+               "path" (op-create-path state op)
+               (op-create state op))
+    "update" (op-update state op)
+    "makecomponent" (op-make-component state op)
+    "delete" (op-delete state op)
+    "move" (op-move state op)
+    "linkassets" (op-link-assets state op)
+    "annotate" (op-annotate state op)
+    "makevariants" (op-make-variants state op)
+    "setvariant" (op-set-variant state op)
+    "swap" (op-swap state op)
+    "detach" (op-detach state op)
+    "resetoverrides" (op-reset-overrides state op)
+    "group" (op-group state op)
+    "ungroup" (op-ungroup state op)
+    "boolean" (op-boolean state op)
+    (error! (str "Unknown op " (pr-str (:op op))
+                 ". Use create, update, delete, move, group, ungroup, boolean, makeComponent, "
+                 "makeVariants, setVariant, swap, detach, resetOverrides, annotate or linkAssets")
+            {:field "op"})))
+
+(defn- apply-op*
+  "`apply-op` with the `cell` of a grid child (any create or update)."
+  [state op]
+  (let [kind  (some-> (:op op) str str/lower)
+        cell  (when (and (#{"create" "update"} kind) (contains? op :cell)) (cell! (:cell op)))
+        state (sync-own-library (apply-op state (dissoc op :cell)))]
+    (if cell
+      (place-cell state (if (= kind "create") (last (:created state)) (resolve-id state (:id op) "id")) cell)
+      state)))
 
 (defn build
   "Applies `ops` (seq of maps with keywordized keys) to the page objects.
@@ -1436,37 +2040,18 @@
   ([page-id objects ops opts]
    (when-not (sequential? ops)
      (error! "ops must be an array of operations" {:field "ops"}))
-   (let [init (start page-id objects opts)]
-     (reduce (fn [state [idx op]]
-               (try
-                 (when-not (map? op)
-                   (error! "Each op must be an object like {\"op\": \"create\", ...}" {:field "op"}))
-                 (sync-own-library
-                  (case (some-> (:op op) str str/lower)
-                   "create" (if (= "component" (some-> (:type op) str str/lower))
-                              (op-instance state op)
-                              (op-create state op))
-                   "update" (op-update state op)
-                   "makecomponent" (op-make-component state op)
-                   "delete" (op-delete state op)
-                   "move" (op-move state op)
-                   "linkassets" (op-link-assets state op)
-                   "annotate" (op-annotate state op)
-                   "makevariants" (op-make-variants state op)
-                   "setvariant" (op-set-variant state op)
-                   "swap" (op-swap state op)
-                   "detach" (op-detach state op)
-                   "resetoverrides" (op-reset-overrides state op)
-                   (error! (str "Unknown op " (pr-str (:op op))
-                                ". Use create, update, delete, move, makeComponent, makeVariants, setVariant, "
-                                "swap, detach, resetOverrides, annotate or linkAssets")
-                           {:field "op"})))
-                 (catch :default cause
-                   (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
-                                   (assoc (ex-data cause) :index idx)
-                                   cause)))))
-             init
-             (map-indexed vector ops)))))
+   (-> (reduce (fn [state [idx op]]
+                 (try
+                   (when-not (map? op)
+                     (error! "Each op must be an object like {\"op\": \"create\", ...}" {:field "op"}))
+                   (apply-op* state op)
+                   (catch :default cause
+                     (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
+                                     (assoc (ex-data cause) :index idx)
+                                     cause)))))
+               (start page-id objects opts)
+               (map-indexed vector ops))
+       (place-grid-children))))
 
 ;; --- text measuring with render-wasm (call after the scene and fonts are loaded)
 
@@ -1672,14 +2257,46 @@
 
 (defn- fill-image [shape] (some-> shape :fills first :fill-image :id str))
 
+(defn- gradient-summary
+  [g]
+  (when g
+    (d/without-nils
+     {:type (some-> (:type g) name)
+      :stops (mapv (fn [{:keys [color opacity offset]}]
+                     (d/without-nils {:color color :offset (round offset)
+                                      :opacity (when (and (number? opacity) (< opacity 1)) (round opacity))}))
+                   (:stops g))})))
+
 (defn- fill-summary
   [names shape]
-  (let [fill (some-> shape :fills first)
-        o    (:fill-opacity fill)]
+  (let [fills (vec (:fills shape))
+        fill  (first fills)
+        o     (:fill-opacity fill)]
     (d/without-nils
      {:fill (:fill-color fill)
-      :fillOpacity (when (and (:fill-color fill) (number? o) (< o 1)) (round o))
-      :fillAsset (ref-name names (:fill-color-ref-id fill))})))
+      :fillOpacity (when (and (or (:fill-color fill) (:fill-color-gradient fill)) (number? o) (< o 1)) (round o))
+      :fillAsset (ref-name names (:fill-color-ref-id fill))
+      :fillGradient (gradient-summary (:fill-color-gradient fill))
+      :fills (when (> (count fills) 1) (count fills))})))
+
+(defn- effects-summary
+  [shape]
+  (d/without-nils
+   {:shadow (some->> (:shadow shape)
+                     (remove :hidden)
+                     (map (fn [{:keys [style offset-x offset-y blur spread color]}]
+                            (d/without-nils
+                             {:style (when (= style :inner-shadow) "inner")
+                              :x (round offset-x) :y (round offset-y) :blur (round blur)
+                              :spread (when (and spread (not (zero? spread))) (round spread))
+                              :color (:color color)
+                              :opacity (round (:opacity color))})))
+                     seq
+                     vec)
+    :blur (when-not (get-in shape [:blur :hidden]) (some-> (get-in shape [:blur :value]) round))
+    :backgroundBlur (when-not (get-in shape [:background-blur :hidden])
+                      (some-> (get-in shape [:background-blur :value]) round))
+    :blendMode (let [b (:blend-mode shape)] (when (and b (not= :normal b)) (name b)))}))
 
 (defn- stroke-summary
   [names shape]
@@ -1728,11 +2345,96 @@
                                    :text-transform :typography-ref-id])
                    (assoc :color (some-> % :fills first :fill-color)))]
     (when node
-      (d/without-nils
-       {:textColor (:fill-color fill)
-        :textColorAsset (ref-name names (:fill-color-ref-id fill))
-        :textStyle (text-style names node)
-        :mixedStyles (when (some #(not= (style %) (style node)) (rest nodes)) true)}))))
+      (let [mixed? (some #(not= (style %) (style node)) (rest nodes))]
+        (d/without-nils
+         {:textColor (:fill-color fill)
+          :textColorAsset (ref-name names (:fill-color-ref-id fill))
+          :textStyle (text-style names node)
+          :textDecoration (let [t (:text-decoration node)] (when (and t (not= "none" t)) t))
+          :verticalAlign (let [v (:vertical-align (:content shape))] (when (and v (not= "top" v)) v))
+          :mixedStyles (when mixed? true)
+          :spans (when mixed?
+                   (let [base (text-style names node)]
+                     (mapv (fn [n]
+                             (let [st (text-style names n)]
+                               (merge {:text (:text n)}
+                                      (into {} (remove (fn [[k v]] (= v (get base k)))) st)
+                                      (d/without-nils
+                                       {:textColor (let [c (some-> n :fills first :fill-color)]
+                                                     (when (not= c (:fill-color fill)) c))
+                                        :textDecoration (let [t (:text-decoration n)]
+                                                          (when (and t (not= "none" t)) t))}))))
+                           nodes)))})))))
+
+(defn- track-summary
+  [{:keys [type value]}]
+  (case type
+    :fixed (round value)
+    :flex (str (round value) "fr")
+    :percent (str (round value) "%")
+    "auto"))
+
+(defn- not-default
+  [v default]
+  (when (and (some? v) (not= v default)) (name v)))
+
+(defn- layout-summary
+  [shape]
+  (cond
+    (ctl/flex-layout? shape)
+    (d/without-nils
+     {:type "flex"
+      :direction (some-> (:layout-flex-dir shape) name)
+      :gap (:layout-gap shape)
+      :padding (:layout-padding shape)
+      :wrap (when (= :wrap (:layout-wrap-type shape)) true)
+      :alignItems (not-default (:layout-align-items shape) :start)
+      :justifyContent (not-default (:layout-justify-content shape) :start)})
+
+    (ctl/grid-layout? shape)
+    (d/without-nils
+     {:type "grid"
+      :direction (not-default (:layout-grid-dir shape) :row)
+      :columns (mapv track-summary (:layout-grid-columns shape))
+      :rows (mapv track-summary (:layout-grid-rows shape))
+      :gap (:layout-gap shape)
+      :padding (:layout-padding shape)
+      :alignItems (not-default (:layout-align-items shape) :start)
+      :justifyItems (not-default (:layout-justify-items shape) :start)})))
+
+(defn- cell-summary
+  [objects shape]
+  (let [parent (get objects (:parent-id shape))]
+    (when (ctl/grid-layout? parent)
+      (when-let [{:keys [row column row-span column-span align-self justify-self]}
+                 (ctl/get-cell-by-shape-id parent (:id shape))]
+        (d/without-nils
+         {:row row :column column
+          :rowSpan (when (> row-span 1) row-span)
+          :columnSpan (when (> column-span 1) column-span)
+          :alignSelf (not-default align-self :auto)
+          :justifySelf (not-default justify-self :auto)})))))
+
+(defn- item-summary
+  [objects shape]
+  (let [in-layout? (ctl/any-layout? objects (:parent-id shape))
+        {:keys [m1 m2 m3 m4]} (:layout-item-margin shape)
+        margin (when (some #(and % (not (zero? %))) [m1 m2 m3 m4]) [(or m1 0) (or m2 0) (or m3 0) (or m4 0)])]
+    (d/without-nils
+     {:margin margin
+      :minWidth (round (:layout-item-min-w shape))
+      :maxWidth (round (:layout-item-max-w shape))
+      :minHeight (round (:layout-item-min-h shape))
+      :maxHeight (round (:layout-item-max-h shape))
+      :alignSelf (some-> (:layout-item-align-self shape) name)
+      :absolute (when (:layout-item-absolute shape) true)
+      :zIndex (let [z (:layout-item-z-index shape)] (when (and z (not (zero? z))) z))
+      :constraints (when (and (not in-layout?)
+                              (cfh/frame-shape? (get objects (:parent-id shape)))
+                              (not= uuid/zero (:parent-id shape)))
+                     (let [h (:constraints-h shape) v (:constraints-v shape)]
+                       (when (or (and h (not= h :left)) (and v (not= v :top)))
+                         (d/without-nils {:h (some-> h name) :v (some-> v name)}))))})))
 
 (defn shape-summary
   "Compact, JSON-friendly description of a shape (x/y relative to its
@@ -1754,20 +2456,18 @@
         :width (round width)
         :height (round height)})
       (fill-summary names shape)
+      (effects-summary shape)
       (d/without-nils
        {:image (fill-image shape)
+        :bool (some-> (:bool-type shape) name)
         :stroke (stroke-summary names shape)
         :radius (radius-summary shape)
         :opacity (when (and (number? o) (< o 1)) (round o))
         :text (when text? (txt/content->text (:content shape)))})
       (when text? (text-summary names shape))
       (d/without-nils
-       {:layout (when (ctl/flex-layout? shape)
-                  (d/without-nils
-                   {:type "flex"
-                    :direction (some-> (:layout-flex-dir shape) name)
-                    :gap (:layout-gap shape)
-                    :padding (:layout-padding shape)}))
+       {:layout (layout-summary shape)
+        :cell (cell-summary objects shape)
         :sizing (let [h (:layout-item-h-sizing shape) v (:layout-item-v-sizing shape)]
                   (when (or h v) (d/without-nils {:h (some-> h name) :v (some-> v name)})))
         :component (when (ctk/instance-head? shape)
@@ -1780,7 +2480,8 @@
                          :nested (when (and (not (:component-root shape)) (not (ctk/main-instance? shape))) true)})))
         :variantSet (when (ctk/is-variant-container? shape) true)
         :tokens (some->> (:applied-tokens shape) not-empty (into {} (map (fn [[k v]] [(name k) v]))))
-        :hidden (when (:hidden shape) true)})))))
+        :hidden (when (:hidden shape) true)})
+      (item-summary objects shape)))))
 
 (defn tree
   "Nested summary of `root-id`'s subtree, at most `max-depth` levels deep.

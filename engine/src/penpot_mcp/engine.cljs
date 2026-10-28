@@ -507,7 +507,7 @@
   (p/let [dims  (measure-texts! ctx state variants)
           state (p/do (edit/second-pass (edit/apply-geometry state dims)))
           dims  (measure-texts! ctx state variants)
-          state (p/do (edit/fit-images (edit/apply-geometry state dims)))]
+          state (p/do (edit/regroup (edit/fit-images (edit/apply-geometry state dims))))]
     (add-position-data! ctx state variants)))
 
 (defn- edit-objects!
@@ -1271,7 +1271,8 @@
   (->js (into {}
               (map (fn [[id c]]
                      [(str id) (d/without-nils
-                                {:name (library/full-name c)
+                                {:id id
+                                 :name (library/full-name c)
                                  :mainInstanceId (:main-instance-id c)
                                  :mainInstancePage (:main-instance-page c)
                                  :variantId (:variant-id c)
@@ -1441,6 +1442,7 @@
               :created (->js (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state)))
               :linkAssets (->js (:link-reports state))
               :pages (file-pages-js data2)
+              :components (components-js data2)
               :summary (->js (first (library/describe [file] nil 100)))})))))
 
 (defn edit-library-offline
