@@ -450,7 +450,7 @@
   [v]
   (clj->js (walk/postwalk #(if (uuid? %) (str %) %) v)))
 
-(declare themed-objects!)
+(declare themed-objects! font-variants!)
 
 (defn render-shape
   "JS entry. Renders one shape of a file to image bytes.

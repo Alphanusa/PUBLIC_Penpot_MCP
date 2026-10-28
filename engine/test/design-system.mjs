@@ -545,5 +545,22 @@ await expectError("navigate to a nested board", () => engine.editFileOffline(kit
     { op: "create", type: "frame", ref: "b", parent: "a", width: 5, height: 5 },
     { op: "update", id: "a", interactions: [{ action: "navigate", destination: "b" }] }], { pageId: "Screens" }), /top-level board/);
 
+// ================================================================ delete like the editor
+section("delete");
+
+{
+    const c = proto.result.created;
+    const del = await engine.editFileOffline(proto.file, [{ op: "delete", id: c.home }], { pageId: "Screens" });
+    const page = pageNamed(del, "Screens");
+    check(!page.objects[c.home] && !page.objects[c.cta] && !page.flows.some((f) => f.name === "Onboarding"),
+          `deleting a board removes its flow: ${J(page.flows)}`);
+    const delMain = await engine.editFileOffline(kit.library, [{ op: "delete", id: kit.created.badge }]);
+    check(Object.values(delMain.components).some((x) => x.name === "Badge" && x.deleted), "deleting a main deletes its component");
+    const label = descendants(objectsOf(screen, "Screens"), ids.save).find((x) => x.name === "Label");
+    const delInCopy = await engine.editFileOffline(screen.file, [{ op: "delete", id: label.id }], { pageId: "Screens" });
+    const kept = objectsOf(delInCopy, "Screens")[label.id];
+    check(kept && kept.hidden === true, `a layer of a copy is hidden, not deleted: ${J(kept && kept.hidden)}`);
+}
+
 console.log(JSON.stringify({ ok: failures.length === 0, failures }, null, 2));
 if (failures.length) process.exit(1);

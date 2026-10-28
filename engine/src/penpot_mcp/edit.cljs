@@ -695,6 +695,8 @@
 
 ;; --- prototypes and export settings
 
+(declare objects-of resolve-id)
+
 (def ^:private interaction-props [:trigger :action :destination :delay :url :preserveScroll :overlay :animation])
 
 (defn- animation!
@@ -1268,7 +1270,13 @@
                   (or (some? layout) (and (= type :frame) (ctl/any-layout? shape))) (update :reflow conj id))]
     (touch-layout-parent state (objects-of state) id)))
 
+(declare run-sub)
+
 (defn- op-delete
+  "Deletes a shape and its children like the editor (`generate-delete-shapes`):
+  a main's component becomes a deleted component, prototype links and flows
+  to deleted boards go, groups left empty go too; a layer inside a component
+  copy is hidden instead (the copy follows its main)."
   [state op]
   (props/check-shape-op! :delete nil op)
   (let [objects (objects-of state)
@@ -1276,10 +1284,12 @@
         _       (when-not (contains? objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
         state   (touch-layout-parent state objects id)
         ids     (cfh/get-children-ids-with-self objects id)
-        changes (pcb/remove-objects (:changes state) ids)]
+        state   (second (run-sub state (fn [changes]
+                                         [nil (second (cls/generate-delete-shapes changes (d/ordered-set id) {}))])))
+        alive   (objects-of state)]
     (-> state
-        (assoc :changes changes)
-        (update :deleted into ids)
+        (update :deleted into (remove #(contains? alive %) ids))
+        (update ::flows #(into {} (filter (fn [[_ f]] (contains? alive (:starting-frame f)))) %))
         (update :regroup conj (:parent-id (get objects id))))))
 
 (def ^:private library-change-types
@@ -1333,7 +1343,7 @@
   and returns [result changes]; returns [result state]."
   [state f]
   (let [objects (objects-of state)
-        page    {:id (::page-id state) :objects objects}
+        page    {:id (::page-id state) :objects objects :flows (::flows state)}
         sub     (-> (pcb/empty-changes :mcp (::page-id state))
                     (pcb/with-page page)
                     (pcb/with-objects objects)
@@ -2511,9 +2521,11 @@
   (let [strokes (vec (:strokes shape))
         s       (first strokes)
         o       (:stroke-opacity s)]
-    (when (string? (:stroke-color s))
+    (when (or (string? (:stroke-color s)) (:stroke-color-gradient s))
       (d/without-nils
        {:color (:stroke-color s)
+        :gradient (gradient-summary (:stroke-color-gradient s))
+        :style (let [st (:stroke-style s)] (when (and st (not= st :solid)) (name st)))
         :width (round (:stroke-width s))
         :align (some-> (:stroke-alignment s) name)
         :opacity (when (and (number? o) (< o 1)) (round o))
