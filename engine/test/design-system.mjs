@@ -8,6 +8,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(here, "../dist");
@@ -27,6 +28,45 @@ async function expectError(name, fn, pattern) {
     } catch (e) {
         check(pattern.test(e.message), `${name}: ${J(e.message)} does not match ${pattern}`);
     }
+}
+
+/** Minimal PNG decoder (8-bit RGB/RGBA, no interlace), as in features.mjs. */
+function decodePng(bytes) {
+    const buf = Buffer.from(bytes);
+    let pos = 8;
+    let width, height, colorType;
+    const idat = [];
+    while (pos < buf.length) {
+        const len = buf.readUInt32BE(pos);
+        const type = buf.toString("ascii", pos + 4, pos + 8);
+        const data = buf.subarray(pos + 8, pos + 8 + len);
+        if (type === "IHDR") {
+            width = data.readUInt32BE(0);
+            height = data.readUInt32BE(4);
+            colorType = data[9];
+        } else if (type === "IDAT") idat.push(data);
+        else if (type === "IEND") break;
+        pos += 12 + len;
+    }
+    const bpp = colorType === 6 ? 4 : 3;
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = width * bpp;
+    const out = Buffer.alloc(height * stride);
+    for (let y = 0; y < height; y++) {
+        const filter = raw[y * (stride + 1)];
+        for (let x = 0; x < stride; x++) {
+            const v = raw[y * (stride + 1) + 1 + x];
+            const a = x >= bpp ? out[y * stride + x - bpp] : 0;
+            const b = y > 0 ? out[(y - 1) * stride + x] : 0;
+            const c = x >= bpp && y > 0 ? out[(y - 1) * stride + x - bpp] : 0;
+            const p = a + b - c;
+            const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+            const paeth = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+            const pred = [0, a, b, (a + b) >> 1, paeth][filter];
+            out[y * stride + x] = (v + pred) & 0xff;
+        }
+    }
+    return { width, height, pixel: (x, y) => [...out.subarray(y * stride + x * bpp, y * stride + x * bpp + 3)] };
 }
 
 const pageNamed = (res, name) => res.pages.find((p) => p.name === name);
@@ -356,6 +396,154 @@ await expectError("cell outside a grid", () => engine.applyOpsOffline([
                   /grid layout/);
 await expectError("bad track", () => engine.applyOpsOffline([{ op: "create", type: "frame", layout: { type: "grid", columns: ["wide"] } }]),
                   /track/);
+
+// ================================================================ tokens
+section("tokens: typography, shadow, stroke width, rotation, sizing, DTCG");
+
+const tokenFile = (await engine.libraryOffline([], [], { name: "Tokens" })).library;
+const tk = await engine.tokensOffline(tokenFile, [
+    { op: "addSet", name: "core" },
+    { op: "addToken", set: "core", type: "typography", name: "type.label",
+      value: { fontFamily: "Source Sans Pro", fontSize: "16", fontWeight: "700", lineHeight: "1.5", letterSpacing: "0.5", textCase: "uppercase" } },
+    { op: "addToken", set: "core", type: "shadow", name: "elevation.1",
+      value: [{ offsetX: "0", offsetY: "4", blur: "12", spread: "0", color: "#0b1b3f33", inset: false }] },
+    { op: "addToken", set: "core", type: "stroke-width", name: "border.thin", value: "2" },
+    { op: "addToken", set: "core", type: "rotation", name: "tilt", value: "15" },
+    { op: "addToken", set: "core", type: "spacing", name: "space.sm", value: "8" },
+    { op: "addToken", set: "core", type: "sizing", name: "size.max", value: "120" },
+    { op: "addToken", set: "core", type: "color", name: "color.bg", value: "#ffffff" },
+    { op: "addToken", set: "core", type: "color", name: "color.line", value: "#3366ff" },
+    { op: "addSet", name: "dark" },
+    { op: "addToken", set: "dark", type: "color", name: "color.bg", value: "#111111" },
+    { op: "addTheme", group: "Mode", name: "Light", sets: ["core"], active: true },
+    { op: "addTheme", group: "Mode", name: "Dark", sets: ["core", "dark"] },
+], null, [
+    { op: "create", type: "frame", ref: "card", name: "Card", width: 300, height: 200, stroke: "#3366ff",
+      layout: { direction: "column", padding: 16, gap: 8 }, tokens: { fill: "color.bg", shadow: "elevation.1", strokeWidth: "border.thin" } },
+    { op: "create", type: "text", ref: "t", parent: "card", text: "Hello", growType: "auto-width", tokens: { typography: "type.label" } },
+    { op: "create", type: "rect", ref: "r", parent: "card", width: 50, height: 50, fill: "#e8593c",
+      tokens: { rotation: "tilt", margin: "space.sm" } },
+    { op: "create", type: "rect", ref: "f", parent: "card", height: 20, fill: "#00aa88", sizing: { h: "fill" }, tokens: { maxWidth: "size.max" } },
+]);
+{
+    const o = tk.pages[0].objects, c = tk.pageCreated;
+    const card = o[c.card], t = o[c.t], r = o[c.r], f = o[c.f];
+    check(card?.shadow?.[0]?.["offset-y"] === 4 && card.shadow[0].blur === 12 && card.shadow[0].color.opacity === 0.2
+          && card["applied-tokens"]?.shadow === "elevation.1", `shadow token: ${J(card?.shadow)}`);
+    check(card?.strokes?.[0]?.["stroke-width"] === 2 && card.strokes[0]["stroke-color"] === "#3366ff"
+          && card["applied-tokens"]?.["stroke-width-top"] === "border.thin", `stroke width token: ${J(card?.strokes)}`);
+    const node = t?.content?.children?.[0]?.children?.[0]?.children?.[0];
+    check(node?.["font-weight"] === "700" && node["font-size"] === "16" && node["line-height"] === "1.5"
+          && node["letter-spacing"] === "0.5" && node["text-transform"] === "uppercase" && t["applied-tokens"]?.typography === "type.label",
+          `typography token: ${J(node && [node["font-weight"], node["font-size"], node["line-height"], node["letter-spacing"], node["text-transform"]])}`);
+    check(Math.round(r?.rotation) === 15 && r["applied-tokens"]?.rotation === "tilt", `rotation token: ${r?.rotation}`);
+    check(r?.["layout-item-margin"]?.m1 === 8 && r["applied-tokens"]?.m1 === "space.sm", `margin token: ${J(r?.["layout-item-margin"])}`);
+    check(f?.["layout-item-max-w"] === 120 && Math.round(f.selrect.width) === 120, `max width token caps a fill child: ${f && f.selrect.width}`);
+}
+// theme switch updates the shapes; a themed render previews it without saving
+const light = decodePng(await engine.renderFileOffline(tk.file, tk.pageCreated.card, { scale: 1 }));
+const dark = decodePng(await engine.renderFileOffline(tk.file, tk.pageCreated.card, { scale: 1, theme: "Mode/Dark" }));
+check(light.pixel(150, 180)[0] > 240 && dark.pixel(150, 180)[0] < 40, `themed render: light ${light.pixel(150, 180)} dark ${dark.pixel(150, 180)}`);
+writeFileSync(resolve(here, "out/ds-theme-dark.png"), await engine.renderFileOffline(tk.file, tk.pageCreated.card, { scale: 1, theme: "Mode/Dark" }));
+const switched2 = await engine.tokensOffline(tk.file, [{ op: "updateTheme", theme: "Mode/Dark", active: true }]);
+check(switched2.shapesUpdated >= 1 && switched2.pages[0].objects[tk.pageCreated.card].fills[0]["fill-color"] === "#111111",
+      `theme switch updates the card: ${switched2.shapesUpdated}`);
+// DTCG export and import
+check(tk.dtcg?.core?.type?.label?.$type === "typography" && tk.dtcg?.$themes?.length === 2, `DTCG export: ${J(Object.keys(tk.dtcg ?? {}))}`);
+const fresh = (await engine.libraryOffline([], [], { name: "Fresh" })).library;
+const imported = await engine.tokensOffline(fresh, [{ op: "import", tokens: tk.dtcg, mode: "replace" }]);
+check(J(imported.imported?.[0]?.sets) === J(["core", "dark"]) && imported.tokens.themes.length === 2
+      && imported.tokens.tokens.some((x) => x.name === "type.label"), `DTCG import: ${J(imported.imported)}`);
+const merged = await engine.tokensOffline(imported.file, [{ op: "import", setName: "core",
+    tokens: JSON.stringify({ color: { bg: { $type: "color", $value: "#fafafa" }, accent: { $type: "color", $value: "#e8593c" } } }) }],
+    { set: "core", type: "color" });
+{
+    const byName = Object.fromEntries(merged.tokens.tokens.map((x) => [x.name, x.value]));
+    check(byName["color.bg"] === "#fafafa" && byName["color.accent"] === "#e8593c" && byName["color.line"] === "#3366ff",
+          `merge import updates and adds: ${J(byName)}`);
+}
+await expectError("text token on a board", () => engine.tokensOffline(tk.file, [{ op: "updateSet", set: "core", description: "x" }], null,
+    [{ op: "create", type: "frame", tokens: { typography: "type.label" } }]), /applies to texts/);
+await expectError("bad import", () => engine.tokensOffline(fresh, [{ op: "import", tokens: "{nope" }]), /not valid JSON/);
+
+// rotation by hand
+const rot = await engine.applyOpsOffline([{ op: "create", type: "frame", ref: "f", width: 100, height: 100 },
+    { op: "create", type: "rect", ref: "r", parent: "f", x: 25, y: 25, width: 50, height: 50, rotation: 45 }]);
+check(Math.round(rot.objects[rot.created.r].rotation) === 45 && rot.shapes.find((x) => x.id === rot.created.r)?.rotation === 45,
+      `rotation: ${rot.objects[rot.created.r].rotation}`);
+
+// ================================================================ audit
+section("audit_design");
+
+const card = (ref, y) => [
+    { op: "create", type: "frame", ref, name: "Card", x: 500, y, width: 200, height: 80, fill: "#ffffff" },
+    { op: "create", type: "text", parent: ref, x: 10, y: 10, text: "Title", textColor: "#111111" },
+    { op: "create", type: "rect", parent: ref, x: 10, y: 40, width: 30, height: 30, fill: "#3366ff" },
+];
+const messy = await engine.libraryOffline([
+    { op: "create", type: "frame", ref: "screen", name: "Board", width: 400, height: 300, fill: "#ffffff",
+      layout: { direction: "column", gap: 13, padding: 16 } },
+    { op: "create", type: "text", parent: "screen", text: "Low contrast", textColor: "#cccccc", fontSize: 14 },
+    { op: "create", type: "text", parent: "screen", text: "Fine", textColor: "#111111" },
+    { op: "create", type: "rect", parent: "screen", width: 50, height: 50, fill: "#3366ff" },
+    { op: "create", type: "rect", parent: "screen", width: 50, height: 50, fill: "#3467fe" },
+    { op: "create", type: "ellipse", x: 0, y: 400, width: 10, height: 10, fill: "#e8593c" },
+    ...card("c1", 0), ...card("c2", 100), ...card("c3", 200),
+    { op: "create", type: "frame", ref: "row", name: "Toolbar", x: 0, y: 500, width: 300, height: 40 },
+    { op: "create", type: "rect", parent: "row", x: 0, y: 0, width: 40, height: 40, fill: "#3366ff" },
+    { op: "create", type: "rect", parent: "row", x: 50, y: 0, width: 40, height: 40, fill: "#3366ff" },
+    { op: "create", type: "rect", parent: "row", x: 100, y: 0, width: 40, height: 40, fill: "#3366ff" },
+], [{ op: "add", type: "color", name: "Brand / Primary", color: "#3366FF" }], { name: "Messy" });
+const report = await engine.auditOffline(messy.library, {});
+{
+    const has = (cat, re) => report.issues.some((i) => i.category === cat && re.test(i.message + " " + (i.fix ?? "")));
+    check(has("contrast", /Low contrast.*AA needs 4.5/), `contrast: ${J(report.issues.filter((i) => i.category === "contrast"))}`);
+    check(has("colors", /#3366FF[\s\S]*linkAssets links them to "Brand \/ Primary"/), "raw color with the library match");
+    check(has("colors", /almost the same/), "near-duplicate colors");
+    check(has("spacing", /13px gap is not a multiple of 4/), `spacing: ${J(report.issues.filter((i) => i.category === "spacing"))}`);
+    check(has("naming", /top-level boards have default names/), "default board name");
+    check(has("structure", /outside any board/), "floating layer");
+    check(has("structure", /"Toolbar" places its children in a row/), "row without layout");
+    check(has("components", /3 layers share the structure of "Card"/), `repeated structure: ${J(report.issues.filter((i) => i.category === "components"))}`);
+    check(report.score < 100 && report.coverage.colors.total > 0 && report.palette.length > 0, `score and coverage: ${report.score}`);
+    const only = await engine.auditOffline(messy.library, { checks: ["contrast"] });
+    check(only.issues.every((i) => i.category === "contrast") && only.issues.length >= 1, "checks filter");
+}
+await expectError("unknown check", () => engine.auditOffline(messy.library, { checks: ["vibes"] }), /Unknown checks/);
+
+// ================================================================ prototypes and exports
+section("prototypes, flows, export settings");
+
+const proto = await engine.editFileOffline(kit.library, [
+    { op: "create", type: "frame", ref: "home", name: "Home", x: 1000, y: 0, width: 360, height: 640, fill: "#ffffff" },
+    { op: "create", type: "frame", ref: "detail", name: "Detail", x: 1400, y: 0, width: 360, height: 640, fill: "#ffffff" },
+    { op: "create", type: "frame", ref: "sheet", name: "Sheet", x: 1800, y: 0, width: 360, height: 300, fill: "#ffffff" },
+    { op: "create", type: "rect", ref: "cta", parent: "home", width: 100, height: 40, fill: "#3366ff",
+      interactions: [
+          { trigger: "click", action: "navigate", destination: "detail", animation: { type: "slide", direction: "left" } },
+          { trigger: "hover", action: "open-overlay", destination: "sheet", overlay: { position: "bottom-center", closeOnClickOutside: true, background: true } },
+      ],
+      exports: [{ type: "png", scale: 2, suffix: "@2x" }, "svg"] },
+    { op: "update", id: "detail", interactions: [{ trigger: "after-delay", delay: 1500, action: "back" }] },
+    { op: "flow", name: "Onboarding", start: "home" },
+], { pageId: "Screens" });
+{
+    const page = pageNamed(proto, "Screens"), o = page.objects, c = proto.result.created;
+    const its = o[c.cta]?.interactions ?? [];
+    check(its.length === 2 && its[0]["action-type"] === "navigate" && its[0].destination === c.detail
+          && its[0].animation?.["animation-type"] === "slide" && its[1]["event-type"] === "mouse-over"
+          && its[1]["overlay-pos-type"] === "bottom-center" && its[1]["background-overlay"] === true, `interactions: ${J(its)}`);
+    check(o[c.detail]?.interactions?.[0]?.delay === 1500 && o[c.detail].interactions[0]["action-type"] === "prev-screen", "after-delay back");
+    check(J(o[c.cta]?.exports) === J([{ type: "png", scale: 2, suffix: "@2x" }, { type: "svg", scale: 1, suffix: "" }]), `exports: ${J(o[c.cta]?.exports)}`);
+    check(page.flows.some((f) => f.name === "Onboarding" && f["starting-frame"] === c.home)
+          && proto.result.flows?.some((f) => f.name === "Onboarding"), `flow: ${J(page.flows)}`);
+    const sum = proto.result.shapes.find((x) => x.id === c.cta);
+    check(sum?.interactions?.[0]?.destinationName === "Detail" && sum?.exports?.length === 2, `summary: ${J(sum?.interactions)}`);
+}
+await expectError("navigate to a nested board", () => engine.editFileOffline(kit.library, [
+    { op: "create", type: "frame", ref: "a", width: 10, height: 10 },
+    { op: "create", type: "frame", ref: "b", parent: "a", width: 5, height: 5 },
+    { op: "update", id: "a", interactions: [{ action: "navigate", destination: "b" }] }], { pageId: "Screens" }), /top-level board/);
 
 console.log(JSON.stringify({ ok: failures.length === 0, failures }, null, 2));
 if (failures.length) process.exit(1);

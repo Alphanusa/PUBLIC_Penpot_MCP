@@ -1562,17 +1562,19 @@
 
 (defn render-file-offline
   "JS entry (tests). Renders shape `objectId` of an in-memory file (any page)
-  to PNG bytes. opts: {images?, scale?}"
+  to PNG bytes. opts: {images?, scale?, theme? (token theme to preview)}"
   [^js file object-id ^js opts]
   (guard
-   #(let [id   (uuid/parse object-id)
-          data (:data file)
-          page (d/seek (fn [page] (contains? (:objects page) id))
-                       (map (fn [pid] (get-in data [:pages-index pid])) (:pages data)))
-          ctx  {:images (js-images (some-> opts .-images))}]
-      (->> (ensure-module!)
-           (p/mcat (fn [_] (render-scene! ctx (:objects page) [id] {:scale (or (some-> opts .-scale) 1) :format :png :variants []})))
-           (p/fmap first)))))
+   #(let [id     (uuid/parse object-id)
+          data   (:data file)
+          page   (d/seek (fn [page] (contains? (:objects page) id))
+                         (map (fn [pid] (get-in data [:pages-index pid])) (:pages data)))
+          ctx    {:images (js-images (some-> opts .-images))}
+          themes (let [t (some-> opts .-theme js->clj)] (cond (string? t) [t] (sequential? t) (vec t)))]
+      (p/let [_       (ensure-module!)
+              objects (if (seq themes) (themed-objects! ctx file (:id page) themes []) (:objects page))
+              pngs    (render-scene! ctx objects [id] {:scale (or (some-> opts .-scale) 1) :format :png :variants []})]
+        (first pngs)))))
 
 (defn tokens-offline
   "JS entry (tests). edit_tokens `ops` on an in-memory file (with the
