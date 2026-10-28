@@ -25,6 +25,8 @@
    ["node:path" :as path]
    ["undici" :as http]
    [app.common.data :as d]
+   [app.common.files.changes :as cfc]
+   [app.common.files.changes-builder :as pcb]
    [app.common.fonts :as cfnt]
    ;; Required for side effects: transit read handlers and deftype impls the
    ;; RPC responses are decoded into.
@@ -32,6 +34,7 @@
    [app.common.geom.point]
    [app.common.geom.rect]
    [app.common.logging :as l]
+   [app.common.logic.libraries :as cll]
    [app.common.transit :as t]
    [app.common.types.fills.impl]
    [app.common.types.objects-map]
@@ -46,8 +49,10 @@
    [cuerdas.core :as str]
    [penpot-mcp.edit :as edit]
    [penpot-mcp.fonts :as fonts]
+   [penpot-mcp.library :as library]
    [penpot-mcp.media :as media]
    [penpot-mcp.pages :as pages]
+   [penpot-mcp.util :as u]
    [promesa.core :as p]))
 
 (l/set-level! :warn)
@@ -149,6 +154,69 @@
                                               (doto (unchecked-set "Authorization" (str "Token " token))))
                                    :body form}))
          (p/mcat (partial handle-response command)))))
+
+;; --- server-sent events (import-binfile)
+
+(defn- parse-sse
+  "[event data] pairs of a server-sent events body (Penpot writes transit
+  data, one event per block)."
+  [body]
+  (into []
+        (keep (fn [block]
+                (let [lines (str/lines block)
+                      event (some #(when (str/starts-with? % "event:") (str/trim (subs % 6))) lines)
+                      data  (->> lines
+                                 (filter #(str/starts-with? % "data:"))
+                                 (map #(str/trim (subs % 5)))
+                                 (str/join "\n"))]
+                  (when event
+                    [event (when-not (str/blank? data)
+                             (try (t/decode-str data) (catch :default _ data)))]))))
+        (str/split (str body) #"\r?\n\r?\n")))
+
+(defn- rpc-sse
+  "Calls a streaming RPC command and resolves to its events once the stream
+  ends."
+  [{:keys [base-uri token]} command params]
+  (when (str/blank? base-uri)
+    (throw (ex-info "Penpot base URI is not configured" {})))
+  (let [uri (join-uri base-uri (str "api/main/methods/" (name command)))]
+    (->> (p/do (http/fetch uri #js {:method "POST"
+                                   :headers (doto (auth-headers token)
+                                              (unchecked-set "Accept" "text/event-stream"))
+                                   :body (t/encode-str params)}))
+         (p/mcat (fn [^js resp]
+                   (->> (.text resp)
+                        (p/mcat (fn [body]
+                                  (if (= 200 (.-status resp))
+                                    (p/resolved (parse-sse body))
+                                    (p/rejected (rpc-error command (.-status resp) body)))))))))))
+
+;; --- chunked uploads (fonts, .penpot packages)
+
+(def ^:private chunk-size (* 20 1024 1024))
+
+(defn- upload-session!
+  "Uploads `data` with the chunked-upload API, like the frontend
+  (create-upload-session + upload-chunk), and resolves to the session id."
+  [ctx ^js data mtype filename]
+  (let [total  (.-byteLength data)
+        chunks (max 1 (js/Math.ceil (/ total chunk-size)))]
+    (->> (rpc ctx :create-upload-session {:total-chunks chunks})
+         (p/mcat (fn [{:keys [session-id]}]
+                   (->> (range chunks)
+                        (reduce (fn [prev i]
+                                  (p/mcat (fn [_]
+                                            (rpc-multipart ctx :upload-chunk
+                                                           {"session-id" session-id "index" i}
+                                                           {:field "content"
+                                                            :data (.subarray data (* i chunk-size)
+                                                                             (min total (* (inc i) chunk-size)))
+                                                            :mtype mtype
+                                                            :filename filename}))
+                                          prev))
+                                (p/resolved nil))
+                        (p/fmap (constantly session-id))))))))
 
 ;; --- fonts
 
@@ -428,23 +496,30 @@
                          state
                          (into {} (map (fn [id] [id (edit/position-data (get objects id))])) ids)))))))))
 
+(defn- layout!
+  "The layout pass of an edit: measure texts, apply layouts and geometry
+  (twice, for auto-height texts sized by a layout), size `contain` image
+  fills, compute text position data. Resolves to the state."
+  [ctx state variants]
+  (p/let [dims  (measure-texts! ctx state variants)
+          state (p/do (edit/second-pass (edit/apply-geometry state dims)))
+          dims  (measure-texts! ctx state variants)
+          state (p/do (edit/fit-images (edit/apply-geometry state dims)))]
+    (add-position-data! ctx state variants)))
+
 (defn- edit-objects!
-  "Runs the edit pipeline on `objects`: build changes, measure texts, apply
-  layout/geometry, size `contain` image fills, compute text position data.
-  `variants` are the team's font variants. Resolves to the edit state."
-  [ctx page-id objects ops variants]
-  (reset-on-error
-   (p/let [_     (ensure-module!)
-           media (media-infos! ctx ops)
-           state (p/do (edit/build page-id objects ops {:fonts (fonts/team-fonts variants)
-                                                        :media media}))
-           ;; pass 1: texts measured at their own width, then layouts
-           dims  (measure-texts! ctx state variants)
-           state (p/do (edit/second-pass (edit/apply-geometry state dims)))
-           ;; pass 2: auto-height texts whose width a layout just changed
-           dims  (measure-texts! ctx state variants)
-           state (p/do (edit/fit-images (edit/apply-geometry state dims)))]
-     (add-position-data! ctx state variants))))
+  "Runs the edit pipeline on `objects`: build changes from ops, then the
+  layout pass. `variants` are the team's font variants; `opts` the
+  `:libraries` (edited file first) and `:file-id`. Resolves to the state."
+  ([ctx page-id objects ops variants] (edit-objects! ctx page-id objects ops variants nil))
+  ([ctx page-id objects ops variants opts]
+   (reset-on-error
+    (p/let [_     (ensure-module!)
+            media (media-infos! ctx ops)
+            state (p/do (edit/build page-id objects ops (assoc opts
+                                                               :fonts (fonts/team-fonts variants)
+                                                               :media media)))]
+      (layout! ctx state variants)))))
 
 (defn- edit-result
   [state]
@@ -453,6 +528,7 @@
      :created (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state))
      :createdIds (mapv str (:created state))
      :deleted (mapv str (:deleted state))
+     :components (some->> (:components state) seq (mapv str))
      :shapes (into [] (keep #(some->> (get objects %) (edit/shape-summary objects)))
                    (concat (:created state) (remove (set (:created state)) (:moved state))))}))
 
@@ -482,6 +558,21 @@
   (->> (rpc ctx :get-font-variants {:file-id file-id})
        (p/merr (fn [_] (p/resolved [])))))
 
+(defn- own-library
+  [file]
+  {:id (:id file) :name (:name file) :data (:data file) :local? true})
+
+(defn- linked-libraries!
+  "The shared libraries linked to a file (also indirectly), with their data."
+  [ctx file-id]
+  (->> (rpc ctx :get-file-libraries {:file-id file-id})
+       (p/mcat (fn [libraries]
+                 (->> libraries
+                      (map (fn [{:keys [id]}]
+                             (p/fmap (fn [lib] {:id (:id lib) :name (:name lib) :data (:data lib)})
+                                     (rpc ctx :get-file {:id id}))))
+                      (p/all))))))
+
 (defn apply-ops
   "JS entry. Applies `ops` to a page of a Penpot file and saves them.
 
@@ -492,18 +583,18 @@
    #(let [ctx     (->ctx opts)
           file-id (->uuid (.-fileId opts))
           ops     (ops->clj (.-ops opts))]
-    (->> (p/all [(rpc ctx :get-file {:id file-id})
-                 (font-variants! ctx file-id)])
-         (p/mcat (fn [[file variants]]
-                   (let [page-id (or (some-> (.-pageId opts) ->uuid) (first-page-id file))
-                         page    (get-in file [:data :pages-index page-id])]
-                     (when-not page
-                       (throw (ex-info (str "Page " page-id " not found in file " file-id) {})))
-                     (->> (edit-objects! ctx page-id (:objects page) ops variants)
-                          (p/mcat (fn [state]
-                                    (save-changes! ctx file (:redo-changes (:changes state)) (.-dryRun opts)
-                                                   (assoc (edit-result state) :pageId (str page-id)))))))))
-         (p/fmap ->js)))))
+      (p/let [[file variants] (p/all [(rpc ctx :get-file {:id file-id})
+                                      (font-variants! ctx file-id)])
+              linked  (if (edit/needs-libraries? ops) (linked-libraries! ctx file-id) [])
+              page-id (or (some-> (.-pageId opts) ->uuid) (first-page-id file))
+              page    (or (get-in file [:data :pages-index page-id])
+                          (throw (ex-info (str "Page " page-id " not found in file " file-id) {})))
+              state   (edit-objects! ctx page-id (:objects page) ops variants
+                                     {:libraries (into [(own-library file)] linked)
+                                      :file-id (:id file)})
+              result  (save-changes! ctx file (:redo-changes (:changes state)) (.-dryRun opts)
+                                     (assoc (edit-result state) :pageId (str page-id)))]
+        (->js result)))))
 
 (defn apply-ops-offline
   "JS entry. Applies `ops` to an empty in-memory page (no Penpot needed) and
@@ -519,8 +610,12 @@
           ops     (ops->clj ops)
           scale   (or (some-> opts .-scale) 1)
           ctx     {:images (js-images (some-> opts .-images))
-                   :gfonts-direct? (boolean (some-> opts .-gfonts))}]
-    (->> (edit-objects! ctx page-id objects ops [])
+                   :gfonts-direct? (boolean (some-> opts .-gfonts))}
+          file-id (uuid/next)
+          libs    (vec (some-> opts .-libraries))]
+    (->> (edit-objects! ctx page-id objects ops []
+                        {:libraries (into [{:id file-id :name "Offline" :data {} :local? true}] libs)
+                         :file-id file-id})
          (p/mcat (fn [state]
                    (let [objects (edit/objects state)
                          target  (let [r (some-> opts .-renderRef)]
@@ -533,8 +628,11 @@
                                         (assoc :tree (edit/tree objects uuid/zero 8))
                                         (assoc :objects (into {}
                                                               (map (fn [[id shape]]
-                                                                     [(str id) (select-keys shape [:type :fills :content])]))
-                                                              (select-keys objects (:created state))))
+                                                                     [(str id) (select-keys shape [:type :name :fills :strokes :content
+                                                                                                   :parent-id :shapes :component-id
+                                                                                                   :component-file :component-root
+                                                                                                   :shape-ref :touched :selrect])]))
+                                                              (dissoc objects uuid/zero)))
                                         (->js)
                                         (doto (unchecked-set "png" png)))))))))))))
 
@@ -588,8 +686,9 @@
 (defn create-file
   "JS entry. Creates a file in a project.
 
-  opts: {baseUri, token, projectId, name, pages?: [name, ...]} — `pages`
-  names the first page and adds the others, in order, in the same call.
+  opts: {baseUri, token, projectId, name, pages?: [name, ...], shared?} —
+  `pages` names the first page and adds the others, in order, in the same
+  call; `shared` publishes the file as a shared library.
   Resolves to {fileId, name, projectId, pages: [{id, name}], revn}."
   [^js opts]
   (guard
@@ -607,11 +706,13 @@
                       (let [state (pages/build data ops)]
                         (save-changes! ctx file (:changes state) false (pages/result state)))
                       (p/resolved (assoc (pages/result (pages/initial data)) :revn (:revn file))))]
-      (->js (-> result
-                (select-keys [:pages :revn])
-                (assoc :fileId (str (:id file))
-                       :name (:name file)
-                       :projectId (str project-id))))))))
+      (p/let [_ (when (.-shared opts) (rpc ctx :set-file-shared {:id (:id file) :is-shared true}))]
+        (->js (-> result
+                  (select-keys [:pages :revn])
+                  (assoc :fileId (str (:id file))
+                         :name (:name file)
+                         :projectId (str project-id)
+                         :shared (boolean (.-shared opts))))))))))
 
 (defn edit-pages
   "JS entry. Adds, renames, deletes and moves pages of a file, saved in one
@@ -670,6 +771,236 @@
          (p/fmap (fn [mobj]
                    (->js (select-keys mobj [:id :name :width :height :mtype]))))))))
 
+;; --- team fonts
+
+(defn upload-font
+  "JS entry. Adds a font variant to a team's fonts, like the font upload of
+  the dashboard (chunked upload + create-font-variant). A family that
+  already exists in the team (same name) gets the new variant.
+
+  opts: {baseUri, token, teamId? | fileId?, data, mimeType, family, weight, style}
+  Resolves to {fontId, family, weight, style, variantId, teamId, newFamily}."
+  [^js opts]
+  (guard
+   #(let [ctx    (->ctx opts)
+          family (str/trim (str (.-family opts)))
+          weight (.-weight opts)
+          style  (str (.-style opts))
+          mtype  (.-mimeType opts)]
+      (p/let [team-id  (if-let [team-id (.-teamId opts)]
+                         (->uuid team-id)
+                         (p/fmap :id (rpc ctx :get-team {:file-id (->uuid (.-fileId opts))})))
+              variants (rpc ctx :get-font-variants {:team-id team-id})
+              same     (filterv (fn [v] (= (u/normalize (:font-family v)) (u/normalize family))) variants)
+              _        (when (some (fn [v] (and (= weight (:font-weight v)) (= style (:font-style v)))) same)
+                         (throw (ex-info (str "The team already has " (:font-family (first same)) " " weight
+                                              (when (= "italic" style) " italic")
+                                              ": nothing uploaded. Use it with fontFamily in edit_page.")
+                                         {:type :invalid-op})))
+              font-id  (or (:font-id (first same)) (uuid/next))
+              family   (or (:font-family (first same)) family)
+              session  (upload-session! ctx (.-data opts) mtype (str family "." (last (str/split mtype "/"))))
+              _        (rpc ctx :create-font-variant {:team-id team-id
+                                                     :font-id font-id
+                                                     :font-family family
+                                                     :font-weight weight
+                                                     :font-style style
+                                                     :uploads {mtype session}})]
+        (->js {:fontId (str "custom-" font-id)
+               :family family
+               :weight weight
+               :style style
+               :variantId (str style "-" weight)
+               :teamId team-id
+               :newFamily (empty? same)})))))
+
+;; --- libraries
+
+(defn- sse-error
+  [command data]
+  (ex-info (str "Penpot " (name command) " failed: "
+                (or (:hint data) (some-> (:code data) name) (pr-str data)))
+           {:type (:type data) :code (:code data)}))
+
+(defn import-library
+  "JS entry. Imports a .penpot package into a project (chunked upload +
+  import-binfile, Penpot 2.15+), optionally shares the imported files and
+  links them to other files.
+
+  opts: {baseUri, token, projectId, name, data, shared=true, linkTo?: [fileId]}
+  Resolves to {files: [{fileId, name, shared}], linked: [{fileId, libraryId}]}."
+  [^js opts]
+  (guard
+   #(let [ctx        (->ctx opts)
+          project-id (->uuid (.-projectId opts))
+          name       (str (.-name opts))
+          shared?    (not (false? (.-shared opts)))
+          link-to    (mapv ->uuid (or (some-> (.-linkTo opts) js->clj) []))]
+      (p/let [session (upload-session! ctx (.-data opts) "application/zip" (str name ".penpot"))
+              events  (rpc-sse ctx :import-binfile {:project-id project-id :name name :upload-id session})
+              _       (when-let [[_ data] (d/seek (fn [[event]] (= "error" event)) events)]
+                        (throw (sse-error :import-binfile data)))
+              result  (second (d/seek (fn [[event]] (= "end" event)) events))
+              ids     (let [ids (if (map? result) (:file-ids result) result)]
+                        (if (seq ids)
+                          (vec ids)
+                          (throw (ex-info "Penpot import-binfile ended without imported files" {}))))
+              files   (rpc ctx :get-project-files {:project-id project-id})
+              files   (filterv (fn [f] (some #{(:id f)} ids)) files)
+              _       (p/all (for [f files :when (and shared? (not (:is-shared f)))]
+                               (rpc ctx :set-file-shared {:id (:id f) :is-shared true})))
+              libs    (filterv (fn [f] (or shared? (:is-shared f))) files)
+              _       (reduce (fn [prev [file-id lib-id]]
+                                (p/mcat (fn [_] (rpc ctx :link-file-to-library {:file-id file-id :library-id lib-id})) prev))
+                              (p/resolved nil)
+                              (for [file-id link-to lib libs] [file-id (:id lib)]))]
+        (->js {:files (mapv (fn [f] {:fileId (:id f) :name (:name f) :shared (or shared? (boolean (:is-shared f)))})
+                            files)
+               :linked (vec (for [file-id link-to lib libs] {:fileId file-id :libraryId (:id lib)}))})))))
+
+(defn- sync-changes
+  "Redo changes of Penpot's library sync (`generate-sync-file-changes`, as
+  the editor does after a library change or when accepting library updates)
+  of `file-id` from `library-id`, for `asset-type` (nil: all)."
+  [libraries file-id library-id asset-type]
+  (vec (:redo-changes
+        (cll/generate-sync-file-changes (pcb/empty-changes nil) nil asset-type file-id nil
+                                        library-id libraries file-id))))
+
+(defn- relayout!
+  "Measures texts and reflows layouts on the pages `changes` touched, with
+  the file `data` they produce. Pages run one after another (one WASM
+  scene). Resolves to the extra redo changes."
+  [ctx data changes variants libraries file-id]
+  (let [by-page (->> changes
+                     (filter #(and (:page-id %) (:id %)))
+                     (group-by :page-id))]
+    (reduce (fn [prev [page-id page-changes]]
+              (p/mcat (fn [acc]
+                        (let [objects (get-in data [:pages-index page-id :objects])
+                              state   (-> (edit/start page-id objects {:fonts (fonts/team-fonts variants)
+                                                                       :libraries libraries
+                                                                       :file-id file-id})
+                                          (edit/touch (distinct (map :id page-changes))))]
+                          (p/fmap (fn [state] (into acc (:redo-changes (:changes state))))
+                                  (layout! ctx state variants))))
+                      prev))
+            (p/resolved [])
+            by-page)))
+
+(defn- sync-file!
+  "Syncs `file` (with its current `:data`) from `library-id` for each of
+  `asset-types` (nil: everything) and lays out what changed. Resolves to
+  {:changes [...] :data data'}."
+  [ctx file libraries library-id asset-types variants]
+  (let [file-id (:id file)
+        [data changes]
+        (reduce (fn [[data acc] asset-type]
+                  (let [libs    (assoc (into {} (map (juxt :id identity)) libraries)
+                                       file-id (assoc file :data data))
+                        changes (sync-changes libs file-id library-id asset-type)]
+                    [(cfc/process-changes data changes false) (into acc changes)]))
+                [(:data file) []]
+                asset-types)]
+    (if (empty? changes)
+      (p/resolved {:changes [] :data data})
+      (->> (relayout! ctx data changes variants
+                      (into [(assoc (own-library file) :data data)] (remove #(= file-id (:id %)) libraries))
+                      file-id)
+           (p/fmap (fn [extra] {:changes (into changes extra)
+                                :data (cfc/process-changes data extra false)}))))))
+
+(defn link-library
+  "JS entry. Links a shared library to a file (or unlinks it). With `sync`,
+  also applies the library's current components, colors and typographies to
+  the file, like accepting \"library updates\" in the editor.
+
+  opts: {baseUri, token, fileId, libraryId, unlink?, sync?, dryRun?}
+  Resolves to {linked, synced, changes, revn?}."
+  [^js opts]
+  (guard
+   #(let [ctx        (->ctx opts)
+          file-id    (->uuid (.-fileId opts))
+          library-id (->uuid (.-libraryId opts))]
+      (if (.-unlink opts)
+        (->> (rpc ctx :unlink-file-from-library {:file-id file-id :library-id library-id})
+             (p/fmap (fn [_] (->js {:linked false}))))
+        (p/let [_       (when-not (.-dryRun opts)
+                          (rpc ctx :link-file-to-library {:file-id file-id :library-id library-id}))
+                result  (if-not (.-sync opts)
+                          {:linked true :synced false}
+                          (reset-on-error
+                           (p/let [_        (ensure-module!)
+                                   [file variants] (p/all [(rpc ctx :get-file {:id file-id})
+                                                           (font-variants! ctx file-id)])
+                                   linked   (linked-libraries! ctx file-id)
+                                   _        (when-not (some (fn [lib] (= library-id (:id lib))) linked)
+                                              (throw (ex-info "The library is not linked to the file" {})))
+                                   {:keys [changes]} (sync-file! ctx file (into [(own-library file)] linked)
+                                                                 library-id [nil] variants)
+                                   saved    (save-changes! ctx file changes (.-dryRun opts)
+                                                           {:linked true :synced true :changes (count changes)})
+                                   ;; like the editor after accepting updates: no more
+                                                   ;; "library updates" notice for this file
+                                   _        (when-not (.-dryRun opts)
+                                              (rpc ctx :update-file-library-sync-status
+                                                   {:file-id file-id :library-id library-id}))]
+                             saved)))]
+          (->js result))))))
+
+(defn library-assets
+  "JS entry. The components, colors and typographies a file can use: its own
+  library and its linked libraries.
+
+  opts: {baseUri, token, fileId, search?, limit=50}
+  Resolves to [{fileId, name, local?, components, colors, typographies, totals}]."
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))]
+      (p/let [file   (rpc ctx :get-file {:id file-id})
+              linked (linked-libraries! ctx file-id)]
+        (->js (library/describe (into [(own-library file)] linked)
+                                (.-search opts)
+                                (or (.-limit opts) 50)))))))
+
+(defn- edit-library*
+  "Applies library ops to `file` and syncs the shapes that use updated
+  assets. Resolves to {:changes [...] :data data' :touched [ids]}."
+  [ctx file ops variants]
+  (let [lib   (library/build-ops (:data file) (fonts/team-fonts variants) (ops->clj ops))
+        kinds (vec (distinct (map first (:updated lib))))
+        file' (assoc file :data (:data lib))]
+    (->> (if (empty? kinds)
+           (p/resolved {:changes [] :data (:data lib)})
+           (sync-file! ctx file' [(own-library file')] (:id file) kinds variants))
+         (p/fmap (fn [{:keys [changes data]}]
+                   {:changes (into (:changes lib) changes)
+                    :data data
+                    :touched (:touched lib)})))))
+
+(defn edit-library
+  "JS entry. Adds, updates and deletes the colors and typographies of a
+  file's own library; shapes of the file that use an updated asset are
+  updated too (texts re-measured, layouts reflowed). Files that link this
+  library get it with link_library {sync: true} (or in the editor).
+
+  opts: {baseUri, token, fileId, ops, dryRun?}
+  Resolves to {changes, assets, revn, saved}."
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))]
+      (reset-on-error
+       (p/let [_ (ensure-module!)
+               [file variants] (p/all [(rpc ctx :get-file {:id file-id})
+                                       (font-variants! ctx file-id)])
+               {:keys [changes data]} (edit-library* ctx file (.-ops opts) variants)
+               result (save-changes! ctx file changes (.-dryRun opts)
+                                     {:changes (count changes)
+                                      :library (first (library/describe [(assoc (own-library file) :data data)] nil 200))})]
+         (->js result))))))
+
 ;; --- offline helpers for tests
 
 (defn pages-offline
@@ -690,6 +1021,60 @@
                                          ids pages))}
           state (pages/build data (ops->clj ops))]
       (->js (assoc (pages/result state) :changes (:changes state))))))
+
+(defn library-offline
+  "JS entry (tests). Builds an in-memory library file: `libraryOps` (colors,
+  typographies) first, then `ops` (edit ops on its page, e.g. boards using
+  those assets, then makeComponent). Resolves to {library (opaque, for
+  applyOpsOffline `libraries` and editLibraryOffline), created, summary}."
+  [^js ops ^js library-ops]
+  (guard
+   #(let [file-id (uuid/next)
+          page    (ctp/make-empty-page {:id (uuid/next) :name "Components"})
+          data0   {:id file-id :pages [(:id page)] :pages-index {(:id page) page}
+                   :components {} :colors {} :typographies {}}
+          lib     (if (seq library-ops)
+                    (library/build-ops data0 [] (ops->clj library-ops))
+                    {:changes []})
+          ;; verify? true: the same schema checks as the backend
+          data1   (cfc/process-changes data0 (vec (:changes lib)) true)]
+      (p/let [state (edit-objects! {} (:id page) (get-in data1 [:pages-index (:id page) :objects]) (ops->clj ops) []
+                                   {:libraries [{:id file-id :name "Library" :data data1 :local? true}]
+                                    :file-id file-id})
+              data2 (cfc/process-changes data1 (vec (:redo-changes (:changes state))) true)
+              file  {:id file-id :name "Library" :data data2}]
+        #js {:library file
+             :created (->js (into {} (map (fn [[ref id]] [ref (str id)])) (:refs state)))
+             :summary (->js (first (library/describe [file] nil 100)))}))))
+
+(defn edit-library-offline
+  "JS entry (tests). edit_library on an in-memory file from libraryOffline or
+  applyOpsOffline: resolves to {library (updated), changes, objects}."
+  [^js library ^js ops]
+  (guard
+   #(->> (ensure-module!)
+         (p/mcat (fn [_] (edit-library* {} library ops [])))
+         (p/fmap (fn [{:keys [changes data]}]
+                   (let [file (assoc library :data data)]
+                     #js {:library file
+                          :changes (->js (mapv (fn [c] (select-keys c [:type :id :page-id])) changes))
+                          :valid (do (cfc/process-changes (:data library) changes true) true)
+                          :summary (->js (first (library/describe [file] nil 100)))
+                          :objects (->js (into {}
+                                               (for [[_ page] (:pages-index data)
+                                                     [id shape] (:objects page)]
+                                                 [(str id) (select-keys shape [:name :type :fills :content :selrect])])))}))))))
+
+(defn file-transit
+  "JS entry (tests). A get-file response, transit encoded like the backend's,
+  for an in-memory file from libraryOffline: lets a fake backend serve it."
+  [^js file ^js opts]
+  (t/encode-str (cond-> {:id (:id file)
+                         :name (:name file)
+                         :revn (or (some-> opts .-revn) 0)
+                         :vern 0
+                         :data (:data file)}
+                  (some-> opts .-projectId) (assoc :project-id (uuid/parse (.-projectId opts))))))
 
 (defn image-info
   "JS entry (tests). {mtype, width, height} of encoded image bytes, or null."
