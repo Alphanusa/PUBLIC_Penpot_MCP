@@ -195,5 +195,167 @@ const detached = await engine.editFileOffline(screen.file, [
     check(textOf(label) === "Button", `reset drops the text override: ${textOf(label)}`);
 }
 
+// ================================================================ vectors
+section("vectors");
+
+const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+const vec = await engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "box", name: "Icons", width: 300, height: 80, fill: "#ffffff",
+      layout: { direction: "row", gap: 8, padding: 8, alignItems: "center" } },
+    { op: "create", type: "svg", ref: "check", parent: "box", name: "Check", svg: ICON, width: 48, height: 48, color: "#3366ff" },
+    { op: "create", type: "path", ref: "tri", parent: "box", name: "Triangle", d: "M0 0 L24 12 L0 24 Z", fill: "#e8593c",
+      width: 48, height: 48 },
+    { op: "create", type: "path", ref: "line", parent: "box", name: "Line", d: "M0 0 L40 0" },
+    { op: "create", type: "frame", ref: "plain", parent: "box", name: "Plain", width: 80, height: 60, fill: "#f4f1ea" },
+    { op: "create", type: "rect", ref: "a", parent: "plain", x: 10, y: 10, width: 30, height: 30, fill: "#00aa88" },
+    { op: "create", type: "ellipse", ref: "b", parent: "plain", x: 25, y: 20, width: 30, height: 30, fill: "#3366ff" },
+    { op: "boolean", ref: "u", ids: ["a", "b"], kind: "union", name: "Blob" },
+    { op: "create", type: "rect", ref: "c", parent: "box", width: 10, height: 10, fill: "#000000" },
+    { op: "create", type: "rect", ref: "d", parent: "box", width: 10, height: 10, fill: "#000000" },
+    { op: "group", ref: "g", ids: ["c", "d"], name: "Pair" },
+], { renderRef: "box", scale: 2 });
+writeFileSync(resolve(here, "out/ds-vectors.png"), vec.png);
+{
+    const o = vec.objects, c = vec.created;
+    const icon = o[c.check];
+    check(icon?.type === "group" && Math.round(icon.selrect.width) === 48 && Math.round(icon.selrect.height) === 48,
+          `svg imported as a 48px group: ${J(icon && { t: icon.type, w: icon.selrect.width, h: icon.selrect.height })}`);
+    const strokes = descendants(o, c.check).flatMap((s) => s?.strokes ?? []);
+    check(strokes.length > 0 && strokes.every((s) => s["stroke-color"] === "#3366ff"), `icon tinted: ${J(strokes.map((s) => s["stroke-color"]))}`);
+    check(descendants(o, c.check).some((s) => s?.type === "path"), "svg path became a Penpot path");
+    const tri = o[c.tri];
+    check(tri?.type === "path" && Math.round(tri.selrect.width) === 48 && tri.fills?.[0]?.["fill-color"] === "#e8593c",
+          `path scaled and filled: ${J(tri && { t: tri.type, w: tri.selrect.width })}`);
+    check(o[c.line]?.strokes?.[0]?.["stroke-alignment"] === "center", `a path without style gets a centered stroke: ${J(o[c.line]?.strokes)}`);
+    const u = o[c.u];
+    check(u?.type === "bool" && u["bool-type"] === "union" && J(u.shapes?.slice().sort()) === J([c.a, c.b].sort()),
+          `boolean union: ${J(u && { t: u.type, k: u["bool-type"], s: u.shapes })}`);
+    check(u?.fills?.[0]?.["fill-color"] === "#3366ff", `boolean takes the top shape's fill: ${J(u?.fills)}`);
+    const g = o[c.g];
+    check(g?.type === "group" && g.shapes.length === 2 && g.parent === undefined && g["parent-id"] === c.box,
+          `group in the layout: ${J(g && { t: g.type, p: g["parent-id"] })}`);
+    const summary = vec.shapes.find((s) => s.id === c.u);
+    check(summary?.bool === "union", `summary shows the boolean kind: ${J(summary)}`);
+}
+const ungrouped = await engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "f", width: 100, height: 100 },
+    { op: "create", type: "rect", ref: "x", parent: "f", width: 10, height: 10 },
+    { op: "create", type: "rect", ref: "y", parent: "f", x: 20, width: 10, height: 10 },
+    { op: "group", ref: "g", ids: ["x", "y"] },
+    { op: "ungroup", id: "g" },
+]);
+check(!ungrouped.objects[ungrouped.created.g] && ungrouped.objects[ungrouped.created.x]["parent-id"] === ungrouped.created.f,
+      "ungroup moves the layers back to the board");
+await expectError("bad svg", () => engine.applyOpsOffline([{ op: "create", type: "svg", svg: "<svg><path></svg>" }]), /not valid SVG/);
+await expectError("bad path", () => engine.applyOpsOffline([{ op: "create", type: "path", d: "hello" }]), /path data/i);
+await expectError("boolean of boards", () => engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "a", width: 10, height: 10 }, { op: "create", type: "frame", ref: "b", width: 10, height: 10 },
+    { op: "boolean", ids: ["a", "b"] }]), /Boards can't be combined/);
+
+// ================================================================ effects
+section("effects and rich text");
+
+const fx = await engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "card", name: "Card", width: 240, height: 140, radius: 16,
+      fill: { gradient: { type: "linear", angle: 90, stops: ["#3366ff", "#00aa88"] } },
+      shadow: [{ y: 8, blur: 24, color: "#0b1b3f", opacity: 0.18 }, { style: "inner", x: 0, y: 1, blur: 0, color: "#ffffff", opacity: 0.4 }],
+      stroke: { color: "#ffffff", width: 1, style: "dashed" }, blendMode: "multiply" },
+    { op: "create", type: "rect", ref: "glass", parent: "card", x: 20, y: 20, width: 80, height: 40, fill: ["#ffffff", { color: "#000000", opacity: 0.1 }],
+      blur: 2, backgroundBlur: 8 },
+    { op: "create", type: "text", ref: "t", parent: "card", x: 20, y: 80, width: 200, growType: "auto-height", fontSize: 16, textColor: "#ffffff",
+      verticalAlign: "center",
+      spans: [{ text: "Total " }, { text: "Rp 1.250.000", fontWeight: "700", textDecoration: "underline" }, { text: "\nper month", fontSize: 12 }] },
+], { renderRef: "card", scale: 2 });
+writeFileSync(resolve(here, "out/ds-effects.png"), fx.png);
+{
+    const o = fx.objects, c = fx.created;
+    const card = o[c.card];
+    const g = card?.fills?.[0]?.["fill-color-gradient"];
+    check(g?.type === "linear" && g["start-x"] === 0 && g["end-x"] === 1 && g.stops.length === 2 && g.stops[1].offset === 1,
+          `gradient at 90deg goes left to right: ${J(g)}`);
+    check(card?.shadow?.length === 2 && card.shadow[0].style === "drop-shadow" && card.shadow[1].style === "inner-shadow"
+          && card.shadow[0].color.opacity === 0.18, `shadows: ${J(card?.shadow)}`);
+    check(card?.strokes?.[0]?.["stroke-style"] === "dashed" && card["blend-mode"] === "multiply", "dashed stroke and blend mode");
+    const glass = o[c.glass];
+    check(glass?.fills?.length === 2 && glass.blur?.value === 2 && glass["background-blur"]?.value === 8,
+          `two fills, blur, background blur: ${J(glass && { f: glass.fills, b: glass.blur, bb: glass["background-blur"] })}`);
+    const t = o[c.t];
+    const paras = t?.content?.children?.[0]?.children ?? [];
+    check(paras.length === 2, `"\\n" starts a paragraph: ${paras.length}`);
+    const spans = paras[0]?.children ?? [];
+    check(spans.length === 2 && spans[1]["font-weight"] === "700" && spans[1]["text-decoration"] === "underline"
+          && spans[0]["font-weight"] === "400", `spans styled: ${J(spans.map((n) => [n.text, n["font-weight"], n["text-decoration"]]))}`);
+    check(paras[1]?.children?.[0]?.["font-size"] === "12" && t?.content?.["vertical-align"] === "center",
+          `second paragraph and vertical align: ${J([paras[1]?.children?.[0]?.["font-size"], t?.content?.["vertical-align"]])}`);
+    const ts = fx.shapes.find((s) => s.id === c.t);
+    check(ts?.mixedStyles && ts.spans?.length === 3 && ts.spans[1].fontWeight === "700", `summary lists the spans: ${J(ts?.spans)}`);
+    const cs = fx.shapes.find((s) => s.id === c.card);
+    check(cs?.shadow?.length === 2 && cs?.fillGradient?.type === "linear" && cs?.blendMode === "multiply", `summary shows effects: ${J(cs)}`);
+}
+// removing effects
+const noFx = await engine.applyOpsOffline([
+    { op: "create", type: "rect", ref: "r", width: 10, height: 10, shadow: { y: 2 }, blur: 3 },
+    { op: "update", id: "r", shadow: "none", blur: 0 },
+]);
+check((noFx.objects[noFx.created.r].shadow ?? []).length === 0 && noFx.objects[noFx.created.r].blur === undefined, "shadow and blur removed");
+await expectError("gradient with one stop", () => engine.applyOpsOffline([{ op: "create", type: "rect", fill: { gradient: { stops: ["#000000"] } } }]),
+                  /two stops/);
+await expectError("bad blend mode", () => engine.applyOpsOffline([{ op: "create", type: "rect", blendMode: "dodgy" }]), /blendMode/);
+
+// ================================================================ grid and layout items
+section("grid layout, layout items, constraints");
+
+const grid = await engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "grid", name: "Dashboard", width: 400, height: 300, fill: "#f4f1ea",
+      layout: { type: "grid", columns: ["1fr", "1fr", 100], rows: [60, "1fr"], gap: 10, padding: 10 } },
+    { op: "create", type: "rect", ref: "header", parent: "grid", name: "Header", fill: "#3366ff", sizing: { h: "fill", v: "fill" },
+      cell: { row: 1, column: 1, columnSpan: 3 } },
+    { op: "create", type: "rect", ref: "main", parent: "grid", name: "Main", fill: "#00aa88", sizing: { h: "fill", v: "fill" },
+      cell: { row: 2, column: 1, columnSpan: 2 } },
+    { op: "create", type: "rect", ref: "side", parent: "grid", name: "Side", fill: "#e8593c", sizing: { h: "fill", v: "fill" } },
+    { op: "create", type: "frame", ref: "row", name: "Row", x: 0, y: 320, width: 400, height: 60, layout: { direction: "row", gap: 10, padding: 10 } },
+    { op: "create", type: "rect", ref: "m", parent: "row", width: 50, height: 40, fill: "#000000", margin: [0, 20, 0, 0] },
+    { op: "create", type: "rect", ref: "f", parent: "row", width: 50, height: 40, fill: "#3366ff", sizing: { h: "fill" }, maxWidth: 120, alignSelf: "end" },
+    { op: "create", type: "rect", ref: "abs", parent: "row", x: 380, y: 0, width: 20, height: 20, fill: "#e8593c", absolute: true, zIndex: 5 },
+    { op: "create", type: "frame", ref: "pin", name: "Pinned", x: 0, y: 400, width: 200, height: 100 },
+    { op: "create", type: "rect", ref: "bar", parent: "pin", x: 0, y: 80, width: 200, height: 20, constraints: { h: "leftright", v: "bottom" } },
+    { op: "update", id: "pin", height: 150 },
+], { renderRef: "grid", scale: 1 });
+writeFileSync(resolve(here, "out/ds-grid.png"), grid.png);
+{
+    const o = grid.objects, c = grid.created;
+    const gb = o[c.grid];
+    check(gb?.layout === "grid" && gb["layout-grid-columns"]?.length === 3 && gb["layout-grid-rows"]?.length === 2,
+          `grid tracks: ${J(gb && [gb["layout-grid-columns"], gb["layout-grid-rows"]])}`);
+    const cells = Object.values(gb?.["layout-grid-cells"] ?? {});
+    const cellOf = (id) => cells.find((cl) => cl.shapes.includes(id));
+    check(cellOf(c.header)?.["column-span"] === 3 && cellOf(c.main)?.row === 2 && cellOf(c.main)?.["column-span"] === 2,
+          `cells: ${J(cells.map((cl) => [cl.row, cl.column, cl["row-span"], cl["column-span"], cl.shapes.length]))}`);
+    check(cellOf(c.side)?.row === 2 && cellOf(c.side)?.column === 3, `auto-placed in the free cell: ${J(cellOf(c.side))}`);
+    const w = (id) => Math.round(o[id].selrect.width), h = (id) => Math.round(o[id].selrect.height);
+    // 400 - 2*10 padding - 2*10 gaps = 360; 100 fixed; 260 / 2 = 130 per fr
+    check(w(c.header) === 380 && h(c.header) === 60, `header spans the row: ${w(c.header)}x${h(c.header)}`);
+    check(w(c.main) === 270 && w(c.side) === 100 && h(c.side) === 210, `main spans 2 fr columns: ${w(c.main)}, side ${w(c.side)}x${h(c.side)}`);
+    const ms = grid.shapes.find((s) => s.id === c.main);
+    check(ms?.cell?.row === 2 && ms?.cell?.columnSpan === 2, `summary shows the cell: ${J(ms?.cell)}`);
+    const gs = grid.shapes.find((s) => s.id === c.grid);
+    check(J(gs?.layout?.columns) === J(["1fr", "1fr", 100]), `summary shows the tracks: ${J(gs?.layout)}`);
+    // flex item options
+    const x = (id) => Math.round(o[id].selrect.x - o[o[id]["parent-id"]].selrect.x);
+    check(o[c.m]?.["layout-item-margin"]?.m2 === 20 && x(c.f) === 10 + 50 + 20 + 10, `margin pushes the next item: f at ${x(c.f)}`);
+    check(w(c.f) === 120 && o[c.f]["layout-item-align-self"] === "end", `fill capped by maxWidth: ${w(c.f)}`);
+    check(o[c.abs]?.["layout-item-absolute"] === true && x(c.abs) === 380, `absolute child keeps its position: ${x(c.abs)}`);
+    // constraints
+    const bar = o[c.bar], pin = o[c.pin];
+    check(bar?.["constraints-v"] === "bottom" && Math.round(bar.selrect.y - pin.selrect.y) === 130,
+          `bottom constraint follows the resize: ${bar && Math.round(bar.selrect.y - pin.selrect.y)}`);
+}
+await expectError("cell outside a grid", () => engine.applyOpsOffline([
+    { op: "create", type: "frame", ref: "f", width: 10, height: 10 }, { op: "create", type: "rect", parent: "f", cell: { row: 1, column: 1 } }]),
+                  /grid layout/);
+await expectError("bad track", () => engine.applyOpsOffline([{ op: "create", type: "frame", layout: { type: "grid", columns: ["wide"] } }]),
+                  /track/);
+
 console.log(JSON.stringify({ ok: failures.length === 0, failures }, null, 2));
 if (failures.length) process.exit(1);

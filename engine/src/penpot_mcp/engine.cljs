@@ -664,12 +664,8 @@
                                         (assoc :tree (edit/tree objects uuid/zero 8))
                                         (assoc :objects (into {}
                                                               (map (fn [[id shape]]
-                                                                     [(str id) (select-keys shape [:type :name :fills :strokes :content
-                                                                                                   :parent-id :shapes :component-id
-                                                                                                   :component-file :component-root
-                                                                                                   :shape-ref :touched :selrect
-                                                                                                   :applied-tokens :layout-gap
-                                                                                                   :layout-padding :r1 :opacity])]))
+                                                                     [(str id) (dissoc shape :points :transform :transform-inverse
+                                                                                       :position-data :svg-defs :svg-attrs)]))
                                                               (dissoc objects uuid/zero)))
                                         (->js)
                                         (doto (unchecked-set "png" png)))))))))))))
@@ -1263,7 +1259,8 @@
                 :flows (vec (vals (:flows page)))
                 :objects (into {}
                                (map (fn [[id shape]]
-                                      [(str id) (dissoc shape :points :transform :transform-inverse :position-data)]))
+                                      [(str id) (dissoc shape :points :transform :transform-inverse :position-data
+                                                        :svg-defs :svg-attrs)]))
                                (:objects page))}))))
 
 (defn- components-js
