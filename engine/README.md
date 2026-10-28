@@ -41,8 +41,26 @@ await engine.applyOps({ ...ctx, fileId, pageId, dryRun: false, ops: [
   { op: "create", type: "text", parent: "card", text: "Hello", fontSize: 24, fontWeight: 700 },
 ]});
 
-// offline: same ops on an empty in-memory page, rendered (no Penpot needed)
-await engine.applyOpsOffline(ops, { renderRef: "card", scale: 1 });
+// offline: same ops on an empty in-memory page, rendered (no Penpot needed);
+// `images` provides bytes for image fills, `gfonts` loads Google fonts from fonts.gstatic.com
+await engine.applyOpsOffline(ops, { renderRef: "card", scale: 1, images: { [mediaId]: pngBytes }, gfonts: true });
+
+// projects, files, pages
+await engine.createProject({ ...ctx, name: "Media Proxy", teamId });          // teamId optional
+await engine.createFile({ ...ctx, projectId, name: "UI", pages: ["Design system", "Screens"] });
+await engine.filePages({ ...ctx, fileId });                                  // [{id, name}]
+await engine.editPages({ ...ctx, fileId, dryRun: false, ops: [
+  { op: "add", ref: "archive", name: "Archive" },
+  { op: "rename", id: pageId, name: "Screens" },
+  { op: "move", id: "archive", index: 0 },
+  { op: "delete", id: otherPageId },
+]});
+
+// fonts and images
+await engine.listFonts({ ...ctx, fileId, search: "plex", limit: 20 });      // team / builtin / google
+await engine.uploadImage({ ...ctx, fileId, name: "Logo", url });            // or data + mimeType
+// -> {id, name, width, height, mtype}; then in applyOps:
+//    { op: "create", type: "rect", fill: { image: id, fit: "contain" } } or { op: "create", type: "image", image: id }
 ```
 
 `token` must be a Penpot **access token** (Your account → Access tokens; self-hosted
@@ -57,14 +75,27 @@ with Penpot's own code:
 2. text sizes (auto-width / auto-height) from render-wasm's text layout with the real fonts;
 3. layouts and constraints with `set-objects-modifiers` + `transform-shape`;
 4. a second pass for auto-height texts whose width a layout just set (e.g. `sizing.h = fill`);
-5. text position data from render-wasm.
+5. `contain` image fills sized from the shapes' final size;
+6. text position data from render-wasm.
+
+Before step 1 every op is checked against the properties the engine reads
+([`props.cljs`](src/penpot_mcp/props.cljs)): an unknown or misplaced key (`fontsize`,
+`padding` outside `layout`, `radius` on an ellipse, …) is an error naming the key, with a
+hint, in dry runs too — never silently dropped.
 
 The result is a list of changes sent with `update-file`, validated by the backend like any
 edit made in the editor; people with the file open see it live.
 
-Supported now: boards, rectangles, ellipses, texts (builtin font); fills, strokes, radius,
-opacity, visibility, clip; flex layout and child sizing; create/update/delete.
-Not yet: grid layout, components, images, custom fonts for new text, paths, groups.
+Supported now: boards, rectangles, ellipses, texts, images; color and image fills (cover,
+contain, fill), strokes, radius, opacity, visibility, clip; fonts (team fonts, builtin Source
+Sans Pro, Google Fonts — [`fonts.cljs`](src/penpot_mcp/fonts.cljs)) with real weights and
+styles; flex layout and child sizing; create/update/delete; pages (add, rename, delete,
+move — [`pages.cljs`](src/penpot_mcp/pages.cljs)); new projects and files.
+Not yet: grid layout, components, paths, groups, SVG import as editable vectors.
+
+Image fills need the media's size and type, which no backend RPC returns for an id: the
+engine reads them from the image header ([`media.cljs`](src/penpot_mcp/media.cljs)) when it
+fetches the image to render it.
 
 ## Building
 
@@ -95,9 +126,16 @@ git archive origin/engine-dist dist | tar -x -C engine/
 - `test/edit-smoke.mjs` — offline. Builds a pricing section (flex layouts, fill/hug sizing,
   wrapping text, update + delete ops), checks the computed geometry and renders
   `test/out/edit.png`. Runs in CI.
+- `test/features.mjs` — offline. Property validation errors, Google font loading and
+  measuring (IBM Plex Mono must come out monospaced), image fills (cover/contain/fill, the
+  `image` type, rendered pixels of a `contain` fill), image header parsing and page ops.
+  Needs network access to fonts.gstatic.com. Runs in CI.
 - `test/live.mjs` — against a real Penpot. Needs `PENPOT_URL` and `PENPOT_TOKEN`
   (access token of a **test** account); optional `FILE_ID`, `PAGE_ID`, `OBJECT_ID`,
   otherwise it renders the first board of the first file it finds.
+- `test/live-create.mjs` — against a real Penpot, **creates** a project in a test account:
+  project → file with named pages → page ops → uploaded logo → boards with the logo as a
+  `contain` image fill and IBM Plex texts → render (`test/out/live-create.png`).
 
 ## Spike results (2026-10-20, Penpot `be2e117`)
 
@@ -116,4 +154,4 @@ Offline render verified visually (fills, corner radius, positions, 2× scale).
 
 1. Live round-trip against the team's Penpot (needs a test account access token).
 2. Per-user credentials (OAuth with Logto) instead of one server-wide token.
-3. More ops: grid layout, components, images, groups; custom team fonts for new text.
+3. More ops: grid layout, components, groups, paths; SVG import as vectors.
