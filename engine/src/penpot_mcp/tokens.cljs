@@ -854,18 +854,42 @@
   (and (= :text (:type shape))
        (> (count (into #{} (map #(dissoc % :text)) (txt/node-seq txt/is-text-node? (:content shape)))) 1)))
 
+(defn with-themes
+  "Active tokens of `data` (tokens from `source-data`) with `themes`
+  (names like \"Mode/Dark\") activated, each turning off the other themes
+  of its group, as a preview: the file is not changed."
+  [data source-data themes]
+  (let [l     (lib source-data)
+        _     (when-not l (u/error! "This file has no tokens (see get_tokens)" {:field "theme"}))
+        data' (reduce (fn [data theme]
+                        (let [t (find-theme source-data theme)
+                              changes (clt/generate-set-theme-status
+                                       (-> (pcb/empty-changes :mcp) (pcb/with-library-data data))
+                                       (status data) l (:id t) true)]
+                          (cfc/process-changes data (:redo-changes changes) false)))
+                      data
+                      themes)]
+    (active-tokens data' source-data)))
+
+(declare propagation-ops*)
+
 (defn propagation-ops
   "edit_page update ops that apply again the `changed` tokens to the shapes
   of `objects` using them, as the Tokens panel does after an edit or a theme
   switch. Tokens that no longer exist or resolve are left as they are, and
-  so are shapes inside component copies (they follow their main) and texts
-  with several styles."
-  [objects tokens changed]
+  so are shapes inside component copies (they follow their main; `copies?`
+  includes them, for previews) and texts with several styles."
+  ([objects tokens changed] (propagation-ops objects tokens changed false))
+  ([objects tokens changed copies?]
+   (propagation-ops* objects tokens changed copies?)))
+
+(defn- propagation-ops*
+  [objects tokens changed copies?]
   (into []
         (keep (fn [shape]
                 (let [applied (:applied-tokens shape)]
                   (when (and (seq applied)
-                             (nil? (:shape-ref shape))
+                             (or copies? (nil? (:shape-ref shape)))
                              ;; an update rewrites a text with one style: keep mixed ones
                              (not (mixed-text? shape)))
                     (let [m (first

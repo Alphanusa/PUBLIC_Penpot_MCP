@@ -42,6 +42,7 @@
    [app.common.logic.shapes :as cls]
    [app.common.logic.variants :as clv]
    [app.common.path-names :as cpn]
+   [app.common.schema :as sm]
    [app.common.render-wasm.api.select :as wselect]
    [app.common.render-wasm.helpers :as h]
    [app.common.render-wasm.mem :as mem]
@@ -51,6 +52,7 @@
    [app.common.types.file :as ctf]
    [app.common.types.modifiers :as ctm]
    [app.common.types.shape :as cts]
+   [app.common.types.shape.interactions :as ctsi]
    [app.common.types.shape.layout :as ctl]
    [app.common.types.path :as path]
    [app.common.types.text :as txt]
@@ -691,6 +693,107 @@
                                   styles))]
     (cond-> new valign (assoc :vertical-align valign))))
 
+;; --- prototypes and export settings
+
+(def ^:private interaction-props [:trigger :action :destination :delay :url :preserveScroll :overlay :animation])
+
+(defn- animation!
+  [a]
+  (when (some? a)
+    (when-not (map? a)
+      (error! "animation must be like {\"type\": \"slide\", \"direction\": \"left\", \"duration\": 300}" {:field "animation"}))
+    (props/check-keys! a [:type :duration :easing :direction :way :offsetEffect] "in \"animation\"")
+    (let [type      (or (->kw (:type a) ctsi/animation-types "animation.type") :dissolve)
+          duration  (or (some-> (number! (:duration a) "animation.duration" :min 0) js/Math.round) 300)
+          easing    (or (->kw (:easing a) ctsi/easing-types "animation.easing") :linear)
+          direction (or (->kw (:direction a) ctsi/direction-types "animation.direction") :right)
+          way       (or (->kw (:way a) ctsi/way-types "animation.way") :in)]
+      (case type
+        :dissolve {:animation-type :dissolve :duration duration :easing easing}
+        :slide {:animation-type :slide :duration duration :easing easing :way way :direction direction
+                :offset-effect (true? (bool! (:offsetEffect a) "animation.offsetEffect"))}
+        :push {:animation-type :push :duration duration :easing easing :direction direction}))))
+
+(defn- interaction!
+  "A prototype interaction from {trigger, action, destination, delay, url,
+  preserveScroll, overlay: {position, x, y, closeOnClickOutside,
+  background, relativeTo}, animation}."
+  [state it]
+  (when-not (map? it)
+    (error! "Each interaction is like {\"trigger\": \"click\", \"action\": \"navigate\", \"destination\": <board>}"
+            {:field "interactions"}))
+  (props/check-keys! it interaction-props "in an interaction")
+  (let [objects (objects-of state)
+        event   (or (->kw (:trigger it) ctsi/event-types "trigger"
+                          {:hover :mouse-over :press :mouse-press :delay :after-delay :on-click :click})
+                    :click)
+        action  (or (->kw (:action it) ctsi/action-types "action"
+                          {:back :prev-screen :url :open-url :overlay :open-overlay :close :close-overlay})
+                    :navigate)
+        dest    (when (some? (:destination it)) (resolve-id state (:destination it) "destination"))
+        dshape  (when dest (get objects dest))
+        _       (when (and dest (not (cfh/frame-shape? dshape)))
+                  (error! "destination must be a board of this page (create it before the interaction)" {:field "destination"}))
+        _       (when (and (= action :navigate) dest (not= uuid/zero (:parent-id dshape)))
+                  (error! "navigate goes to a top-level board (a screen)" {:field "destination"}))
+        _       (when (and (#{:navigate :open-overlay :toggle-overlay} action) (nil? dest))
+                  (error! (str (name action) " needs \"destination\": a board") {:field "destination"}))
+        _       (when (and (= action :open-url) (not (and (string? (:url it)) (seq (:url it)))))
+                  (error! "open-url needs \"url\"" {:field "url"}))
+        overlay (:overlay it)
+        _       (when (some? overlay)
+                  (when-not (map? overlay) (error! "overlay must be an object" {:field "overlay"}))
+                  (props/check-keys! overlay [:position :x :y :closeOnClickOutside :background :relativeTo] "in \"overlay\""))
+        manual? (or (some? (:x overlay)) (some? (:y overlay)))
+        result  (cond-> (d/without-nils
+                         {:event-type event
+                          :action-type action
+                          :destination dest
+                          :delay (when (= event :after-delay)
+                                   (or (some-> (number! (:delay it) "delay" :min 0) js/Math.round) 600))
+                          :url (when (= action :open-url) (:url it))
+                          :preserve-scroll (when (= action :navigate) (true? (bool! (:preserveScroll it) "preserveScroll")))
+                          :animation (animation! (:animation it))})
+                  (#{:open-overlay :toggle-overlay} action)
+                  (merge {:overlay-pos-type (if manual?
+                                              :manual
+                                              (or (->kw (:position overlay) ctsi/overlay-positioning-types "overlay.position")
+                                                  :center))
+                          :overlay-position (gpt/point (or (number! (:x overlay) "overlay.x") 0)
+                                                       (or (number! (:y overlay) "overlay.y") 0))
+                          :close-click-outside (true? (bool! (:closeOnClickOutside overlay) "overlay.closeOnClickOutside"))
+                          :background-overlay (true? (bool! (:background overlay) "overlay.background"))
+                          :position-relative-to (some->> (:relativeTo overlay) (#(resolve-id state % "overlay.relativeTo")))}))]
+    (when-not (sm/validate ctsi/schema:interaction result)
+      (error! (str "Invalid interaction " (pr-str it)) {:field "interactions"}))
+    result))
+
+(defn- interactions-attrs
+  [state op]
+  (when (contains? op :interactions)
+    (let [v (:interactions op)]
+      {:interactions (cond
+                       (or (nil? v) (= "none" v)) []
+                       (map? v) [(interaction! state v)]
+                       (sequential? v) (mapv #(interaction! state %) v)
+                       :else (error! "interactions must be a list of interactions, or \"none\"" {:field "interactions"}))})))
+
+(defn- exports-attrs
+  [op]
+  (when (contains? op :exports)
+    (let [v     (:exports op)
+          items (cond (or (nil? v) (= "none" v)) [] (map? v) [v] (sequential? v) v
+                      :else (error! "exports must be like [{\"type\": \"png\", \"scale\": 2, \"suffix\": \"@2x\"}]"
+                                    {:field "exports"}))]
+      {:exports (mapv (fn [e]
+                        (let [e (if (string? e) {:type e} e)]
+                          (when-not (map? e) (error! "Each export is {type, scale, suffix}" {:field "exports"}))
+                          (props/check-keys! e [:type :scale :suffix] "in \"exports\"")
+                          {:type (or (->kw (:type e) #{:png :jpeg :webp :svg :pdf} "exports.type" {:jpg :jpeg}) :png)
+                           :scale (or (number! (:scale e) "exports.scale" :min 0.01) 1)
+                           :suffix (str (or (:suffix e) ""))}))
+                      items)})))
+
 ;; --- shape attrs shared by create and update
 
 (defn- prop-attrs
@@ -702,6 +805,8 @@
    (stroke-attrs state op)
    (effect-attrs state op)
    (item-attrs op)
+   (interactions-attrs state op)
+   (exports-attrs op)
    (when (#{:rect :frame} type) (radius-attrs op))
    (sizing-attrs (:sizing op))
    (d/without-nils
@@ -1091,7 +1196,8 @@
                     (ctl/any-layout? root) (update :reflow conj id))
         state     (touch-layout-parent state (objects-of state) id)
         overrides (select-keys op [:name :width :height :sizing :visible :opacity :margin :minWidth :maxWidth
-                                   :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints])
+                                   :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints
+                                   :interactions :exports])
         state     (if (seq overrides) (op-update state (assoc overrides :op "update" :id (str id))) state)
         objects   (objects-of state)
         candidates (descendant-texts objects id)]
@@ -1372,6 +1478,8 @@
 
 ;; --- groups and boolean shapes
 
+(declare shape!)
+
 (defn- shape-ids!
   "Shapes `v` (a list of ids or refs) of the page."
   [state v field]
@@ -1455,6 +1563,41 @@
         (cond-> (some? (:ref op)) (update :refs assoc (str (:ref op)) id))
         (update :created conj id)
         (touch-layout-parent (objects-of state) id))))
+
+(defn- op-flow
+  "Adds a prototype flow (or moves an existing one with the same name)
+  starting at a top-level board."
+  [state op]
+  (props/check-keys! op [:op :name :start] "for flow")
+  (let [fname    (str/trim (str (or (:name op) "")))
+        _        (when (str/blank? fname) (error! "flow needs \"name\"" {:field "name"}))
+        start    (shape! state (:start op) "start" "flow")
+        _        (when-not (and (cfh/frame-shape? start) (= uuid/zero (:parent-id start)))
+                   (error! "A flow starts at a top-level board (a screen)" {:field "start"}))
+        flows    (::flows state)
+        existing (d/seek #(= (str/lower fname) (str/lower (:name %))) (vals flows))
+        id       (or (:id existing) (uuid/next))
+        flow     {:id id :name fname :starting-frame (:id start)}]
+    (-> state
+        (update :changes #(-> % (pcb/with-page {:id (::page-id state) :flows flows}) (pcb/set-flow id flow)))
+        (assoc-in [::flows id] flow))))
+
+(defn- op-delete-flow
+  [state op]
+  (props/check-keys! op [:op :name] "for deleteFlow")
+  (let [flows (::flows state)
+        flow  (or (d/seek #(= (str/lower (str (:name op))) (str/lower (:name %))) (vals flows))
+                  (error! (str "No flow named " (pr-str (:name op)) ". Flows: "
+                               (str/join ", " (map #(pr-str (:name %)) (vals flows))))
+                          {:field "name"}))]
+    (-> state
+        (update :changes #(-> % (pcb/with-page {:id (::page-id state) :flows flows}) (pcb/set-flow (:id flow) nil)))
+        (update ::flows dissoc (:id flow)))))
+
+(defn flows
+  "Prototype flows of the page as edited: [{name start}]."
+  [state]
+  (mapv (fn [f] {:name (:name f) :start (str (:starting-frame f))}) (vals (::flows state))))
 
 (defn regroup
   "Recomputes the groups and boolean shapes around the shapes the batch
@@ -1977,7 +2120,7 @@
 
 (defn start
   "Empty edit state for a page (see `build` for `opts`, plus `:file-id`)."
-  [page-id objects {:keys [fonts media libraries file-id tokens]}]
+  [page-id objects {:keys [fonts media libraries file-id tokens flows]}]
   {:changes (-> (pcb/empty-changes :mcp page-id)
                 (pcb/with-objects objects))
    :refs {} :created [] :deleted #{} :texts #{} :reflow #{} :modifs {} :contain #{} :regroup #{} :rotate {}
@@ -1986,6 +2129,7 @@
    :tokens (or tokens {})
    ::page-id page-id
    ::file-id file-id
+   ::flows (or flows {})
    :libraries (into {} (map (juxt :id identity)) libraries)
    :assets (library/index libraries)})
 
@@ -2045,9 +2189,11 @@
     "group" (op-group state op)
     "ungroup" (op-ungroup state op)
     "boolean" (op-boolean state op)
+    "flow" (op-flow state op)
+    "deleteflow" (op-delete-flow state op)
     (error! (str "Unknown op " (pr-str (:op op))
                  ". Use create, update, delete, move, group, ungroup, boolean, makeComponent, "
-                 "makeVariants, setVariant, swap, detach, resetOverrides, annotate or linkAssets")
+                 "makeVariants, setVariant, swap, detach, resetOverrides, annotate, linkAssets, flow or deleteFlow")
             {:field "op"})))
 
 (defn- apply-op*
@@ -2526,6 +2672,23 @@
         :radius (radius-summary shape)
         :opacity (when (and (number? o) (< o 1)) (round o))
         :rotation (let [r (:rotation shape)] (when (and (number? r) (not (zero? (round r)))) (round r)))
+        :interactions (some->> (:interactions shape)
+                               (map (fn [{:keys [event-type action-type destination url delay]}]
+                                      (d/without-nils
+                                       {:trigger (some-> event-type name)
+                                        :action (some-> action-type name)
+                                        :destination (some-> destination str)
+                                        :destinationName (some-> (get objects destination) :name)
+                                        :url url
+                                        :delay delay})))
+                               seq
+                               vec)
+        :exports (some->> (:exports shape)
+                          (map (fn [{:keys [type scale suffix]}]
+                                 (d/without-nils {:type (some-> type name) :scale scale
+                                                  :suffix (not-empty suffix)})))
+                          seq
+                          vec)
         :text (when text? (txt/content->text (:content shape)))})
       (when text? (text-summary names shape))
       (d/without-nils

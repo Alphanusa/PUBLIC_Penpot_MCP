@@ -35,6 +35,10 @@
                renderFileOffline penpot-mcp.engine/render-file-offline
                tokensOffline   penpot-mcp.engine/tokens-offline
                editFileOffline penpot-mcp.engine/edit-file-offline
+               auditDesign     penpot-mcp.engine/audit-design
+               auditOffline    penpot-mcp.engine/audit-offline
+               fileVersions    penpot-mcp.engine/file-versions
+               comments        penpot-mcp.engine/comments
                fileTransit     penpot-mcp.engine/file-transit
                imageInfo       penpot-mcp.engine/image-info
                renderDemo      penpot-mcp.engine/render-demo}}}

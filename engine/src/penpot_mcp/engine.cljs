@@ -28,11 +28,12 @@
    [app.common.files.changes :as cfc]
    [app.common.files.changes-builder :as pcb]
    [app.common.files.tokens :as cfo]
+   [app.common.files.helpers :as cfh]
    [app.common.fonts :as cfnt]
    ;; Required for side effects: transit read handlers and deftype impls the
    ;; RPC responses are decoded into.
    [app.common.geom.matrix]
-   [app.common.geom.point]
+   [app.common.geom.point :as gpt]
    [app.common.geom.rect]
    [app.common.logging :as l]
    [app.common.logic.libraries :as cll]
@@ -48,6 +49,7 @@
    [app.wasm.serialize :as serialize]
    [clojure.walk :as walk]
    [cuerdas.core :as str]
+   [penpot-mcp.audit :as audit]
    [penpot-mcp.edit :as edit]
    [penpot-mcp.fonts :as fonts]
    [penpot-mcp.library :as library]
@@ -448,10 +450,14 @@
   [v]
   (clj->js (walk/postwalk #(if (uuid? %) (str %) %) v)))
 
+(declare themed-objects!)
+
 (defn render-shape
   "JS entry. Renders one shape of a file to image bytes.
 
-  opts: {baseUri, token, fileId, pageId, objectId, scale=1, format='png'}
+  opts: {baseUri, token, fileId, pageId, objectId, scale=1, format='png'
+  (png, jpeg, webp, svg, pdf), theme?: token theme(s) to preview ('Mode/Dark'
+  or a list), applied to the render only}
   Resolves to a Uint8Array."
   [^js opts]
   (guard
@@ -460,8 +466,15 @@
           page-id   (->uuid (.-pageId opts))
           object-id (->uuid (.-objectId opts))
           scale     (or (.-scale opts) 1)
-          format    (keyword (or (.-format opts) "png"))]
-    (->> (ensure-module!)
+          format    (keyword (or (.-format opts) "png"))
+          themes    (let [t (some-> (.-theme opts) js->clj)] (cond (string? t) [t] (sequential? t) (vec t)))]
+    (if (seq themes)
+      (reset-on-error
+       (p/let [_        (ensure-module!)
+               [file variants] (p/all [(rpc ctx :get-file {:id file-id}) (font-variants! ctx file-id)])
+               objects  (themed-objects! ctx file page-id themes variants)]
+         (p/fmap first (render-scene! ctx objects [object-id] {:scale scale :format format :variants variants}))))
+      (->> (ensure-module!)
          (p/mcat (fn [_]
                    (p/all [(rpc ctx :get-page {:file-id file-id
                                                :page-id page-id
@@ -471,7 +484,7 @@
          (p/mcat (fn [[page variants]]
                    (render-scene! ctx (:objects page) [object-id]
                                   {:scale scale :format format :variants variants})))
-         (p/fmap first)))))
+         (p/fmap first))))))
 
 ;; --- editing
 
@@ -593,7 +606,7 @@
                  (throw (ex-info (str "Page " page-id " not found in file " (:id file)) {:type :invalid-op})))
         libs (into [(own-library file)] linked)]
     (p/let [state  (edit-objects! ctx page-id (:objects page) ops variants
-                                  {:libraries libs :file-id (:id file) :tokens toks})
+                                  {:libraries libs :file-id (:id file) :tokens toks :flows (:flows page)})
             redo   (vec (:redo-changes (:changes state)))
             data   (p/do (cfc/process-changes (:data file) redo false))
             mains  (p/do (edit/changed-mains state (:objects page)))
@@ -605,6 +618,8 @@
         {:changes (into redo extra)
          :data (:data synced)
          :result (cond-> (assoc (edit-result state) :pageId (str page-id))
+                   (some #(#{"flow" "deleteflow"} (some-> (:op %) str str/lower)) ops)
+                   (assoc :flows (edit/flows state))
                    (seq extra)
                    (assoc :copiesUpdated (count (into #{} (comp (filter #(= :mod-obj (:type %))) (map :id)) extra))))}))))
 
@@ -700,9 +715,15 @@
               names (ref-names! ctx (vals (:objects page)))]
         (let [objects (:objects page)
               root    (or (some-> (.-rootId opts) ->uuid) uuid/zero)]
-          (->js {:pageId (str (:id page))
-                 :pageName (:name page)
-                 :tree (edit/tree objects root (or (.-depth opts) 4) names)}))))))
+          (->js (d/without-nils
+                 {:pageId (str (:id page))
+                  :pageName (:name page)
+                  :flows (some->> (vals (:flows page))
+                                  (map (fn [f] {:name (:name f) :start (str (:starting-frame f))
+                                                :startName (:name (get objects (:starting-frame f)))}))
+                                  seq
+                                  vec)
+                  :tree (edit/tree objects root (or (.-depth opts) 4) names)})))))))
 
 ;; --- projects, files and pages
 
@@ -1250,6 +1271,201 @@
                                               :imported imported})
                                             (select-keys (tokens/describe data data {:limit 0}) [:themes :sets])))]
          (->js saved))))))
+
+;; --- previews with another token theme
+
+(defn- themed-objects!
+  "The objects of page `page-id` of `file` with `themes` active: shapes
+  using tokens get the theme's values, laid out again (copies included).
+  Nothing is saved."
+  [ctx file page-id themes variants]
+  (p/let [source (tokens-source-data! ctx file)
+          data   (:data file)
+          page   (or (get-in data [:pages-index page-id])
+                     (throw (ex-info (str "Page " page-id " not found") {:type :invalid-op})))
+          old    (p/do (tokens/active-tokens data source))
+          new    (p/do (tokens/with-themes data source themes))
+          ops    (p/do (tokens/propagation-ops (:objects page) new (tokens/changed-tokens old new) true))]
+    (if (empty? ops)
+      (:objects page)
+      (p/fmap edit/objects
+              (edit-objects! ctx page-id (:objects page) ops variants
+                             {:libraries [(own-library file)] :file-id (:id file) :tokens new})))))
+
+;; --- design audit
+
+(defn- audit*
+  [file linked source {:keys [page-id checks limit]}]
+  (let [data   (:data file)
+        pages  (if page-id
+                 [(move/resolve-page data page-id "pageId" "the file")]
+                 (keep #(get-in data [:pages-index %]) (:pages data)))
+        assets (library/index (into [(own-library file)] linked))
+        toks   (tokens/active-tokens data source)
+        only   (some->> checks (map (comp str/lower str)) set)]
+    (when-let [bad (seq (remove audit/checks only))]
+      (throw (ex-info (str "Unknown checks: " (str/join ", " bad) ". Checks: " (str/join ", " (sort audit/checks)))
+                      {:type :invalid-op})))
+    (audit/run data pages assets toks {:only only :limit limit})))
+
+(defn audit-design
+  "JS entry. Design system checks over a file (all pages, or one): raw
+  colors and text styles not linked to the library or tokens, spacing and
+  radius off the token scale, text contrast (WCAG AA), components, layer
+  names and structure, with the shapes concerned and how to fix them.
+
+  opts: {baseUri, token, fileId, pageId?, checks?: [names], limit=60}"
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))]
+      (p/let [file   (rpc ctx :get-file {:id file-id})
+              linked (linked-libraries! ctx file-id)
+              source (tokens-source-data! ctx file)]
+        (->js (audit* file linked source {:page-id (.-pageId opts)
+                                          :checks (some-> (.-checks opts) js->clj)
+                                          :limit (.-limit opts)}))))))
+
+(defn audit-offline
+  "JS entry (tests). audit_design on an in-memory file. opts: {pageId?,
+  checks?, libraries?}"
+  [^js file ^js opts]
+  (guard
+   #(->js (audit* file (vec (some-> opts .-libraries)) (:data file)
+                  {:page-id (some-> opts .-pageId)
+                   :checks (some-> opts .-checks js->clj)
+                   :limit (some-> opts .-limit)}))))
+
+;; --- file versions (snapshots)
+
+(defn- iso
+  [v]
+  (cond
+    (instance? js/Date v) (.toISOString v)
+    (some? v) (str v)))
+
+(defn- snapshot-js
+  [s]
+  (d/without-nils
+   {:id (str (:id s))
+    :label (:label s)
+    :createdAt (iso (:created-at s))
+    :createdBy (:created-by s)
+    :profileId (some-> (:profile-id s) str)
+    :lockedBy (some-> (:locked-by s) str)
+    :revn (:revn s)}))
+
+(defn file-versions
+  "JS entry. The versions (snapshots) of a file, as in the History panel:
+  list them, save one, rename, delete, lock/unlock, or restore one (Penpot
+  saves the current state as a version first).
+
+  opts: {baseUri, token, fileId, action: list|create|rename|delete|restore|lock|unlock,
+  id?, label?}"
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))
+          action  (str/lower (str (or (.-action opts) "list")))
+          id      (some-> (.-id opts) ->uuid)
+          label   (.-label opts)
+          need-id (fn [] (or id (throw (ex-info (str action " needs the version id (see action list)") {:type :invalid-op}))))]
+      (p/let [result
+              (case action
+                "list"    (p/resolved nil)
+                "create"  (rpc ctx :create-file-snapshot (cond-> {:file-id file-id} (some? label) (assoc :label (str label))))
+                "rename"  (do (when (str/blank? label)
+                                (throw (ex-info "rename needs label" {:type :invalid-op})))
+                              (rpc ctx :update-file-snapshot {:id (need-id) :label (str label)}))
+                "delete"  (rpc ctx :delete-file-snapshot {:id (need-id)})
+                "restore" (rpc ctx :restore-file-snapshot {:file-id file-id :id (need-id)})
+                "lock"    (rpc ctx :lock-file-snapshot {:id (need-id)})
+                "unlock"  (rpc ctx :unlock-file-snapshot {:id (need-id)})
+                (throw (ex-info (str "Unknown action " (pr-str action)
+                                     ". Use list, create, rename, delete, restore, lock or unlock")
+                                {:type :invalid-op})))
+              versions (rpc ctx :get-file-snapshots {:file-id file-id})]
+        (->js (d/without-nils
+               {:action action
+                :created (when (and (= action "create") (map? result)) (snapshot-js result))
+                :versions (mapv snapshot-js versions)}))))))
+
+;; --- comments
+
+(defn- comment-js
+  [c]
+  (d/without-nils
+   {:id (str (:id c))
+    :owner (or (:owner-fullname c) (some-> (:owner-id c) str))
+    :content (:content c)
+    :createdAt (iso (:created-at c))}))
+
+(defn comments
+  "JS entry. Comment threads of a file: list them (with their comments),
+  start one on a shape or at a position, reply, resolve, reopen, delete.
+
+  opts: {baseUri, token, fileId, action: list|create|reply|resolve|reopen|delete,
+  pageId?, shapeId?, x?, y?, content?, threadId?, includeResolved?, limit=30}"
+  [^js opts]
+  (guard
+   #(let [ctx     (->ctx opts)
+          file-id (->uuid (.-fileId opts))
+          action  (str/lower (str (or (.-action opts) "list")))
+          thread  (some-> (.-threadId opts) ->uuid)
+          content (.-content opts)
+          need    (fn [v what] (or v (throw (ex-info (str action " needs " what) {:type :invalid-op}))))]
+      (p/let [file   (rpc ctx :get-file {:id file-id})
+              data   (:data file)
+              _      (case action
+                       "create"
+                       (let [page-id (or (some-> (.-pageId opts) ->uuid) (first (:pages data)))
+                             objects (get-in data [:pages-index page-id :objects])
+                             shape   (some->> (.-shapeId opts) ->uuid (get objects))
+                             _       (when (and (.-shapeId opts) (nil? shape))
+                                       (throw (ex-info "shapeId not found on the page" {:type :invalid-op})))
+                             frame   (cond
+                                       (nil? shape) uuid/zero
+                                       (cfh/root-frame? shape) (:id shape)
+                                       :else (or (:id (cfh/get-root-frame objects (:id shape))) uuid/zero))
+                             {:keys [x y width]} (:selrect shape)
+                             pos     (if shape
+                                       (gpt/point (+ x width) y)
+                                       (gpt/point (or (.-x opts) 0) (or (.-y opts) 0)))]
+                         (rpc ctx :create-comment-thread {:file-id file-id :page-id page-id :frame-id frame
+                                                          :position pos :content (str (need content "content"))}))
+                       "reply"   (rpc ctx :create-comment {:thread-id (need thread "threadId") :content (str (need content "content"))})
+                       "resolve" (rpc ctx :update-comment-thread {:id (need thread "threadId") :is-resolved true})
+                       "reopen"  (rpc ctx :update-comment-thread {:id (need thread "threadId") :is-resolved false})
+                       "delete"  (rpc ctx :delete-comment-thread {:id (need thread "threadId")})
+                       "list"    nil
+                       (throw (ex-info (str "Unknown action " (pr-str action)
+                                            ". Use list, create, reply, resolve, reopen or delete")
+                                       {:type :invalid-op})))
+              threads (rpc ctx :get-comment-threads {:file-id file-id})
+              page-id (some-> (.-pageId opts) ->uuid)
+              shown   (->> threads
+                           (filter (fn [t] (or (nil? page-id) (= page-id (:page-id t)))))
+                           (filter (fn [t] (or (.-includeResolved opts) (not (:is-resolved t)))))
+                           (sort-by (comp - (fnil identity 0) :seqn))
+                           (take (or (.-limit opts) 30))
+                           (vec))
+              all     (p/all (map (fn [t] (->> (rpc ctx :get-comments {:thread-id (:id t)})
+                                               (p/merr (fn [_] (p/resolved [])))))
+                                  shown))]
+        (->js {:action action
+               :threads (mapv (fn [t cs]
+                                (let [objects (get-in data [:pages-index (:page-id t) :objects])]
+                                  (d/without-nils
+                                   {:id (str (:id t))
+                                    :number (:seqn t)
+                                    :pageId (str (:page-id t))
+                                    :pageName (get-in data [:pages-index (:page-id t) :name])
+                                    :board (some-> (get objects (:frame-id t)) :name)
+                                    :position (some-> (:position t) (select-keys [:x :y]))
+                                    :resolved (boolean (:is-resolved t))
+                                    :comments (mapv comment-js cs)})))
+                              shown all)
+               :total (count threads)})))))
 
 ;; --- offline helpers for tests
 

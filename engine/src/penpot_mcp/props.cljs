@@ -31,7 +31,9 @@
   [:margin :minWidth :maxWidth :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints])
 
 (def ^:private common-props
-  (into [:name :opacity :visible :stroke :sizing :tokens :shadow :blur :backgroundBlur :blendMode] item-props))
+  (into [:name :opacity :visible :stroke :sizing :tokens :shadow :blur :backgroundBlur :blendMode
+         :interactions :exports]
+        item-props))
 (def ^:private box-fill-props [:fill :fillOpacity])
 (def ^:private text-props
   [:text :spans :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
@@ -46,7 +48,9 @@
    :text   (vec (concat geometry-props common-props text-props))
    :image  (vec (concat geometry-props common-props [:image :fit :fillOpacity :radius]))
    ;; `type: "component"` of create: a copy of a library component
-   :component (into [:component :variant :texts :x :y :width :height :name :opacity :visible :sizing] item-props)
+   :component (into [:component :variant :texts :x :y :width :height :name :opacity :visible :sizing
+                     :interactions :exports]
+                    item-props)
    ;; `type: "svg"` of create: SVG markup imported as vectors (a group)
    :svg    (into [:svg :x :y :width :height :name :opacity :visible :sizing :color] item-props)
    :path   (vec (concat geometry-props common-props box-fill-props [:d :color]))

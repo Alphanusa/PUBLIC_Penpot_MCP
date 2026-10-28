@@ -94,30 +94,35 @@ jobs:
           node test/smoke.mjs 2>&1 | tee test/out-smoke.json "$RUNNER_TEMP/smoke.log"
 
       - name: Edit smoke test (offline edit + layout + render)
+        if: always() && steps.build.outcome == 'success'
         working-directory: engine
         run: |
           set -o pipefail
           node test/edit-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/edit-smoke.log"
 
       - name: Feature tests (validation, fonts, images, pages)
+        if: always() && steps.build.outcome == 'success'
         working-directory: engine
         run: |
           set -o pipefail
           node test/features.mjs 2>&1 | tee "$RUNNER_TEMP/features.log"
 
       - name: Library tests (components, library colors and typographies, sync)
+        if: always() && steps.build.outcome == 'success'
         working-directory: engine
         run: |
           set -o pipefail
           node test/libraries.mjs 2>&1 | tee "$RUNNER_TEMP/libraries.log"
 
       - name: Link, move and token tests (linkAssets, move op, move_shapes, design tokens)
+        if: always() && steps.build.outcome == 'success'
         working-directory: engine
         run: |
           set -o pipefail
           node test/link-move-tokens.mjs 2>&1 | tee "$RUNNER_TEMP/link-move-tokens.log"
 
       - name: Design system tests (variants, vectors, effects, grid, tokens, audit)
+        if: always() && steps.build.outcome == 'success'
         working-directory: engine
         run: |
           set -o pipefail
