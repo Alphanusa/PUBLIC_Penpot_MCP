@@ -8,10 +8,18 @@ layout and rendering) — packaged as the [engine](engine/README.md).
 
 | Tool | What it does |
 |---|---|
-| `list_files` | Projects and files the user can access, with ids |
+| `list_files` | Teams, projects and files the user can edit, with ids (optionally each file's pages) |
 | `get_page_overview` | Compact layer tree: ids, geometry, text, flex layout, sizing |
-| `edit_page` | Create / update / delete boards, rectangles, ellipses, texts; fills, strokes, radius, flex layout, sizing — saved in one `update-file`, live for people who have the file open |
+| `edit_page` | Create / update / delete boards, rectangles, ellipses, texts and images; color and image fills, strokes, radius, fonts, flex layout, sizing — saved in one `update-file`, live for people who have the file open. Unknown or misplaced properties are rejected, never ignored |
 | `render_shape` | Renders a board with Penpot's renderer and returns it as an image for the AI to check |
+| `create_project` | New project in a team (the account's default team when none is given) |
+| `create_file` | New file in a project, optionally with named pages |
+| `edit_pages` | Add, rename, delete and reorder pages |
+| `list_fonts` | Font families for texts: the team's uploaded fonts, builtin Source Sans Pro, Google Fonts — with their weights |
+| `upload_image` | Adds a PNG/JPEG/GIF/WebP/SVG to a file's media (from a URL, base64, or a local path when the server has file system access) for image fills |
+
+With these an AI client can go from nothing to "project → file → named pages → boards"
+without anyone opening Penpot.
 
 The plugin-based tools (`execute_code`, `export_shape`, …) keep working as upstream when a
 plugin session is connected.
@@ -46,7 +54,12 @@ is then ignored.
 ## Limits (for now)
 
 - Supported shapes/properties: see "Supported now" in [engine/README.md](engine/README.md);
-  grid layout, components, images, groups and custom fonts for new text are not yet supported.
+  grid layout, components, groups, paths and SVG import as editable vectors are not yet
+  supported (an SVG can be uploaded and used as an image fill).
+- Google fonts are loaded through the Penpot instance's `/internal/gfonts/font` proxy, like
+  Penpot's exporter; in the editor they show when the instance has the Google Fonts provider
+  enabled (Penpot's default).
+- Renaming or deleting projects and files is left to people in Penpot.
 - Renders and edits share one render-wasm instance and run one at a time.
 
 ## Where the code lives

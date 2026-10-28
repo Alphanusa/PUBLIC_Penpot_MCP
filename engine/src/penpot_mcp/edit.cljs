@@ -44,7 +44,10 @@
    [app.common.types.shape.layout :as ctl]
    [app.common.types.text :as txt]
    [app.common.uuid :as uuid]
-   [cuerdas.core :as str]))
+   [cuerdas.core :as str]
+   [penpot-mcp.fonts :as fonts]
+   [penpot-mcp.props :as props]
+   [penpot-mcp.util :as u]))
 
 ;; --- constants mirrored from the workspace
 
@@ -74,15 +77,9 @@
    :layout-padding-type    :simple
    :layout-padding         {:p1 0 :p2 0 :p3 0 :p4 0}})
 
-;; Builtin font (Source Sans Pro) variant ids by weight.
-(def ^:private builtin-variants
-  {"200" "200" "300" "300" "400" "regular" "600" "600" "700" "bold" "900" "black"})
-
 ;; --- input parsing
 
-(defn- error!
-  [msg data]
-  (throw (ex-info msg (assoc data :type :invalid-op))))
+(def ^:private error! u/error!)
 
 (defn- ->kw
   "Parses an enum value: accepts \"spaceBetween\", \"space-between\" or
@@ -113,12 +110,28 @@
     :else
     (error! (str "Invalid " field ": " (pr-str v) " (expected #rrggbb)") {:field field :value v})))
 
+;; NOTE: `number!` & co. return nil for nil, so optional props stay optional.
+
 (defn- number!
-  [v field & {:keys [min]}]
+  [v field & {:keys [min max]}]
   (when (some? v)
-    (if (and (number? v) (js/isFinite v) (or (nil? min) (>= v min)))
+    (if (and (number? v) (js/isFinite v)
+             (or (nil? min) (>= v min))
+             (or (nil? max) (<= v max)))
       v
-      (error! (str "Invalid " field ": " (pr-str v)) {:field field :value v}))))
+      (error! (str "Invalid " field ": " (pr-str v)
+                   (cond
+                     (and min max) (str " (expected a number from " min " to " max ")")
+                     min (str " (expected a number >= " min ")")
+                     :else " (expected a number)"))
+              {:field field :value v}))))
+
+(defn- bool!
+  [v field]
+  (when (some? v)
+    (if (boolean? v)
+      v
+      (error! (str "Invalid " field ": " (pr-str v) " (expected true or false)") {:field field :value v}))))
 
 (defn- four-sides
   "Number, [all], [vertical horizontal] or [top right bottom left]."
@@ -133,32 +146,112 @@
 
 ;; --- attribute builders
 
-(defn- fills-attrs
+(def ^:private image-fits #{:fill :contain :cover})
+
+(defn- media-id!
+  [v field]
+  (or (when (string? v) (uuid/parse* v))
+      (error! (str "Invalid " field ": " (pr-str v) " (expected a media id returned by upload_image)")
+              {:field field :value v})))
+
+(defn- image-fill
+  "Fill with media `image` (an id returned by upload_image). `fit`: cover
+  (default, Penpot's \"keep aspect ratio\": fills the shape, cropped),
+  contain (whole image, centered — set from the final size by `fit-images`)
+  or fill (stretched)."
+  [state image fit opacity field]
+  (let [id   (media-id! image field)
+        info (or (get (:media state) id)
+                 (error! (str "Image " id " not found or not readable: upload it with upload_image "
+                              "and use the id it returns")
+                         {:field field :value image}))
+        fit  (or (->kw fit image-fits "fit") :cover)]
+    {:fill-opacity (or (number! opacity "fill opacity" :min 0 :max 1) 1)
+     :fill-image (d/without-nils
+                  {:id id
+                   :width (:width info)
+                   :height (:height info)
+                   :mtype (:mtype info)
+                   :name (:name info)
+                   :keep-aspect-ratio (not= fit :fill)})}))
+
+(defn- image-fit
+  "The fit of the image fill an op sets, if any."
   [op]
-  (when (contains? op :fill)
-    (let [{:keys [fill fillOpacity]} op]
-      {:fills (if (or (nil? fill) (= "none" fill))
-                []
-                [{:fill-color (color! fill "fill")
-                  :fill-opacity (or (number! fillOpacity "fillOpacity" :min 0) 1)}])})))
+  (let [fill (:fill op)]
+    (cond
+      (and (map? fill) (some? (:image fill))) (or (->kw (:fit fill) image-fits "fit") :cover)
+      (some? (:image op)) (or (->kw (:fit op) image-fits "fit") :cover))))
+
+(defn- fills-attrs
+  "`fill`: \"#rrggbb\", \"none\", {\"color\", \"opacity\"} or {\"image\", \"fit\",
+  \"opacity\"}; `fillOpacity` applies to it."
+  [state op]
+  (let [{:keys [fill fillOpacity]} op]
+    (cond
+      (contains? op :fill)
+      {:fills
+       (cond
+         (or (nil? fill) (= "none" fill))
+         []
+
+         (string? fill)
+         [{:fill-color (color! fill "fill")
+           :fill-opacity (or (number! fillOpacity "fillOpacity" :min 0 :max 1) 1)}]
+
+         (map? fill)
+         (let [{:keys [color image fit opacity]} fill
+               opacity (if (some? opacity) opacity fillOpacity)]
+           (cond
+             (and (some? image) (some? color))
+             (error! "fill takes either \"color\" or \"image\", not both" {:field "fill"})
+
+             (some? image)
+             [(image-fill state image fit opacity "fill.image")]
+
+             (some? color)
+             (do (when (some? fit)
+                   (error! "\"fit\" only applies to image fills" {:field "fill.fit"}))
+                 [{:fill-color (color! color "fill.color")
+                   :fill-opacity (or (number! opacity "fill.opacity" :min 0 :max 1) 1)}])
+
+             :else
+             (error! "fill needs \"color\" or \"image\"" {:field "fill"})))
+
+         :else
+         (error! (str "Invalid fill: " (pr-str fill)
+                      " (use \"#rrggbb\", \"none\" or {\"image\": <media id>, \"fit\": \"cover\"})")
+                 {:field "fill" :value fill}))}
+
+      (some? fillOpacity)
+      (error! "fillOpacity needs a fill in the same op, e.g. \"fill\": \"#3366ff\", \"fillOpacity\": 0.5"
+              {:field "fillOpacity" :value fillOpacity}))))
 
 (defn- stroke-attrs
   [op]
   (when (contains? op :stroke)
     (let [stroke (:stroke op)]
       {:strokes
-       (if (or (nil? stroke) (= "none" stroke))
+       (cond
+         (or (nil? stroke) (= "none" stroke))
          []
+
+         (or (string? stroke) (map? stroke))
          (let [{:keys [color width align opacity]} (if (string? stroke) {:color stroke} stroke)]
            [{:stroke-color (color! color "stroke.color")
-             :stroke-opacity (or (number! opacity "stroke.opacity" :min 0) 1)
+             :stroke-opacity (or (number! opacity "stroke.opacity" :min 0 :max 1) 1)
              :stroke-width (or (number! width "stroke.width" :min 0) 1)
              :stroke-style :solid
-             :stroke-alignment (or (->kw align #{:inner :center :outer} "stroke.align") :inner)}]))})))
+             :stroke-alignment (or (->kw align #{:inner :center :outer} "stroke.align") :inner)}])
+
+         :else
+         (error! (str "Invalid stroke: " (pr-str stroke)
+                      " (use \"#rrggbb\", \"none\" or {\"color\", \"width\", \"align\"})")
+                 {:field "stroke" :value stroke}))})))
 
 (defn- radius-attrs
-  [type op]
-  (when (and (contains? op :radius) (#{:rect :frame} type))
+  [op]
+  (when (contains? op :radius)
     (let [[r1 r2 r3 r4] (four-sides (or (:radius op) 0) "radius")]
       {:r1 r1 :r2 r2 :r3 r3 :r4 r4})))
 
@@ -168,18 +261,23 @@
   [layout]
   (cond
     (nil? layout) nil
-    (or (false? layout) (= "none" (:type layout))) ::remove
+    (or (false? layout) (= "none" layout) (and (map? layout) (= "none" (:type layout)))) ::remove
+    (or (true? layout) (= "flex" layout)) (layout-attrs {})
+    (not (map? layout))
+    (error! (str "Invalid layout: " (pr-str layout) " (use {\"type\": \"flex\", ...} or false)")
+            {:field "layout" :value layout})
     :else
     (let [{:keys [type direction gap rowGap columnGap padding alignItems
                   justifyContent alignContent wrap]} layout
           _ (when-not (contains? #{nil "flex"} type)
-              (error! "Only flex layout is supported for now" {:field "layout.type" :value type}))
+              (error! (str "Invalid layout.type " (pr-str type) ": only flex layout is supported for now")
+                      {:field "layout.type" :value type}))
           [p1 p2 p3 p4] (when (some? padding) (four-sides padding "layout.padding"))
           justify #{:start :center :end :space-between :space-around :space-evenly :stretch}]
       (d/without-nils
        {:layout :flex
         :layout-flex-dir (->kw direction #{:row :row-reverse :column :column-reverse} "layout.direction")
-        :layout-gap (when (or gap rowGap columnGap)
+        :layout-gap (when (or (some? gap) (some? rowGap) (some? columnGap))
                       {:row-gap (or (number! rowGap "layout.rowGap" :min 0) (number! gap "layout.gap" :min 0) 0)
                        :column-gap (or (number! columnGap "layout.columnGap" :min 0) (number! gap "layout.gap" :min 0) 0)})
         :layout-padding (when p1 {:p1 p1 :p2 p2 :p3 p3 :p4 p4})
@@ -187,50 +285,54 @@
         :layout-align-items (->kw alignItems #{:start :end :center :stretch} "layout.alignItems")
         :layout-justify-content (->kw justifyContent justify "layout.justifyContent")
         :layout-align-content (->kw alignContent justify "layout.alignContent")
-        :layout-wrap-type (when (some? wrap) (if wrap :wrap :nowrap))}))))
+        :layout-wrap-type (when (some? (bool! wrap "layout.wrap")) (if wrap :wrap :nowrap))}))))
 
 (defn- sizing-attrs
   [sizing]
-  (when (map? sizing)
+  (cond
+    (nil? sizing) nil
+    (map? sizing)
     (let [aliases {:hug :auto :fixed :fix}
           allowed #{:fix :fill :auto}]
       (d/without-nils
        {:layout-item-h-sizing (->kw (:h sizing) allowed "sizing.h" aliases)
-        :layout-item-v-sizing (->kw (:v sizing) allowed "sizing.v" aliases)}))))
+        :layout-item-v-sizing (->kw (:v sizing) allowed "sizing.v" aliases)}))
+    :else
+    (error! (str "Invalid sizing: " (pr-str sizing) " (use {\"h\": \"fix|fill|hug\", \"v\": \"fix|fill|hug\"})")
+            {:field "sizing" :value sizing})))
 
 (defn- text-styles
   "Text node styles from the op, over `base` (the first text node of the
   existing content, if any)."
-  [op base]
-  (let [{:keys [fontSize fontWeight textAlign lineHeight letterSpacing]} op
+  [state op base]
+  (let [{:keys [fontSize textAlign lineHeight letterSpacing fill]} op
         ;; on text shapes `fill` means the text color
-        textColor (or (:textColor op) (when (string? (:fill op)) (:fill op)))
-        weight (some-> fontWeight str)
-        _ (when (and weight (not (contains? builtin-variants weight)))
-            (error! (str "Unsupported fontWeight " weight ". Use one of "
-                         (str/join ", " (sort (keys builtin-variants))))
-                    {:field "fontWeight" :value fontWeight}))]
+        _ (when (and (some? fill) (not (string? fill)))
+            (error! "On a text, fill is the text color: use \"#rrggbb\" (image fills are not supported on texts)"
+                    {:field "fill" :value fill}))
+        text-color (or (:textColor op) fill)]
     (merge
      (select-keys base txt/text-all-attrs)
+     (fonts/text-font-attrs (:fonts state) op (when (:font-id base) base))
      (d/without-nils
       {:font-size (some-> (number! fontSize "fontSize" :min 1) str)
-       :font-weight weight
-       :font-variant-id (get builtin-variants weight)
        :text-align (some-> (->kw textAlign #{:left :center :right :justify} "textAlign") name)
        :line-height (some-> (number! lineHeight "lineHeight" :min 0) str)
        :letter-spacing (some-> (number! letterSpacing "letterSpacing") str)
-       :fills (when textColor [{:fill-color (color! textColor "textColor") :fill-opacity 1}])}))))
+       :fills (when (some? text-color)
+                [{:fill-color (color! text-color "textColor") :fill-opacity 1}])}))))
 
 (defn- text-op?
   [op]
-  (some #(contains? op %) [:text :fontSize :fontWeight :textColor :fill :textAlign :lineHeight :letterSpacing]))
+  (some #(contains? op %) [:text :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill
+                           :textAlign :lineHeight :letterSpacing]))
 
 (defn- text-content
   "New text content for `op`, keeping the current text and styles of `content`
   where the op doesn't override them."
-  [content op]
+  [state content op]
   (let [base   (first (txt/node-seq txt/is-text-node? content))
-        styles (text-styles op (or base {:fills [{:fill-color "#000000" :fill-opacity 1}]}))
+        styles (text-styles state op (or base {:fills [{:fill-color "#000000" :fill-opacity 1}]}))
         text   (if (contains? op :text)
                  (str (:text op))
                  (or (some-> content txt/content->text) ""))]
@@ -239,17 +341,19 @@
 ;; --- shape attrs shared by create and update
 
 (defn- prop-attrs
-  [type op]
+  "Attrs of the generic props. `type` is the shape type; prop/type
+  combinations were checked by `props/check-shape-op!` before."
+  [state type op]
   (merge
-   (when-not (= type :text) (fills-attrs op))
+   (when-not (= type :text) (fills-attrs state op))
    (stroke-attrs op)
-   (radius-attrs type op)
+   (when (#{:rect :frame} type) (radius-attrs op))
    (sizing-attrs (:sizing op))
    (d/without-nils
     {:name (some-> (:name op) str)
-     :opacity (number! (:opacity op) "opacity" :min 0)
-     :hidden (when (contains? op :visible) (not (:visible op)))
-     :show-content (when (and (= type :frame) (contains? op :clip)) (not (:clip op)))
+     :opacity (number! (:opacity op) "opacity" :min 0 :max 1)
+     :hidden (some-> (bool! (:visible op) "visible") not)
+     :show-content (when (= type :frame) (some-> (bool! (:clip op) "clip") not))
      :grow-type (when (= type :text)
                   (->kw (:growType op) #{:auto-width :auto-height :fixed} "growType"))})))
 
@@ -264,10 +368,21 @@
 
 (def ^:private shape-types
   {"frame" :frame "board" :frame "rect" :rect "rectangle" :rect
-   "ellipse" :circle "circle" :circle "text" :text})
+   "ellipse" :circle "circle" :circle "text" :text "image" :image})
 
 (def ^:private default-names
-  {:frame "Board" :rect "Rectangle" :circle "Ellipse" :text "Text"})
+  {:frame "Board" :rect "Rectangle" :circle "Ellipse" :text "Text" :image "Image"})
+
+(defn- image-size
+  "Size of an image shape: the image's natural size, or the missing
+  dimension from the image's aspect ratio when only one is given."
+  [{iw :width ih :height} width height]
+  (let [ratio (if (and (pos? iw) (pos? ih)) (/ iw ih) 1)]
+    (cond
+      (and width height) [width height]
+      (some? width)      [width (/ width ratio)]
+      (some? height)     [(* height ratio) height]
+      :else              [(max 1 iw) (max 1 ih)])))
 
 (defn- resolve-id
   "Resolves a uuid string or a `ref` given to a shape created earlier in the
@@ -298,11 +413,14 @@
       (update :reflow conj parent-id))))
 
 (defn- op-create
-  [state {:keys [type parent ref x y width height] :as op}]
-  (let [objects   (objects-of state)
-        type*     (or (get shape-types (some-> type str/lower))
-                      (error! (str "Invalid type " (pr-str type) ". Use frame, rect, ellipse or text")
+  [state {:keys [type parent ref x y] :as op}]
+  (let [kind      (or (get shape-types (some-> type str str/lower))
+                      (error! (str "Invalid type " (pr-str type) ". Use frame, rect, ellipse, text or image")
                               {:field "type" :value type}))
+        _         (props/check-shape-op! :create kind op)
+        image?    (= kind :image)
+        type*     (if image? :rect kind)
+        objects   (objects-of state)
         parent-id (or (resolve-id state parent "parent") uuid/zero)
         parent    (or (get objects parent-id)
                       (error! (str "Parent " parent-id " not found on this page") {:field "parent"}))
@@ -311,6 +429,13 @@
         frame-id  (if (cfh/frame-shape? parent) parent-id (:frame-id parent))
         origin    (parent-origin objects parent-id)
         text?     (= type* :text)
+        width     (number! (:width op) "width" :min 0.01)
+        height    (number! (:height op) "height" :min 0.01)
+        img-fill  (when image?
+                    (when (nil? (:image op))
+                      (error! "type image needs \"image\": a media id returned by upload_image" {:field "image"}))
+                    (image-fill state (:image op) (:fit op) (:fillOpacity op) "image"))
+        [width height] (if image? (image-size (:fill-image img-fill) width height) [width height])
         grow-type (when text? (or (->kw (:growType op) #{:auto-width :auto-height :fixed} "growType")
                                   (if width :auto-height :auto-width)))
         id        (uuid/next)
@@ -319,16 +444,19 @@
                                 :type type*
                                 :name (or (some-> (:name op) str)
                                           (when text? (some-> (:text op) str (str/prune 30)))
-                                          (get default-names type*))
+                                          (get-in img-fill [:fill-image :name])
+                                          (get default-names kind))
                                 :x (+ (:x origin) (or (number! x "x") 0))
                                 :y (+ (:y origin) (or (number! y "y") 0))
-                                :width (or (number! width "width" :min 0.01) (if text? 1 100))
-                                :height (or (number! height "height" :min 0.01) (if text? 1 100))
+                                :width (or width (if text? 1 100))
+                                :height (or height (if text? 1 100))
                                 :parent-id parent-id
                                 :frame-id frame-id}
                          text? (assoc :grow-type grow-type
-                                      :content (text-content nil op))))
-                      (merge (prop-attrs type* (dissoc op :growType)))
+                                      :content (text-content state nil op))))
+                      (merge (prop-attrs state type* (cond-> (dissoc op :growType)
+                                                       image? (dissoc :fillOpacity))))
+                      (cond-> image? (assoc :fills [img-fill]))
                       (cond-> (= type* :frame) (with-layout (layout-attrs (:layout op))))
                       (cond-> text? (dissoc :position-data)))
         ;; like the workspace (Plugin API appendChild): in a flex/grid board the
@@ -339,6 +467,7 @@
         state     (cond-> (assoc state :changes changes)
                     (some? ref) (update :refs assoc (str ref) id)
                     true (update :created conj id)
+                    (= :contain (image-fit op)) (update :contain conj id)
                     text? (update :texts conj id)
                     (ctl/any-layout? shape) (update :reflow conj id))]
     (touch-layout-parent state (objects-of state) id)))
@@ -367,17 +496,21 @@
         id      (or (resolve-id state (:id op) "id") (error! "update needs an id" {:field "id"}))
         shape   (or (get objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
         type    (:type shape)
+        _       (props/check-shape-op! :update type op)
         text?   (= type :text)
         layout  (when (= type :frame) (layout-attrs (:layout op)))
-        attrs   (prop-attrs type op)
+        attrs   (prop-attrs state type op)
+        fit     (image-fit op)
         update-fn (fn [shape]
                     (cond-> (merge shape attrs)
                       (some? layout) (with-layout layout)
-                      (and text? (text-op? op)) (-> (assoc :content (text-content (:content shape) op))
+                      (and text? (text-op? op)) (-> (assoc :content (text-content state (:content shape) op))
                                                     (dissoc :position-data))))
         changes (pcb/update-shapes (:changes state) [id] update-fn)
         modifs  (geometry-modifiers objects shape op)
         state   (cond-> (assoc state :changes changes)
+                  (and (contains? op :fill) (not= :contain fit)) (update :contain disj id)
+                  (= :contain fit) (update :contain conj id)
                   (some? modifs) (update :modifs assoc id modifs)
                   (and text? (or (text-op? op) (contains? op :growType))) (update :texts conj id)
                   (or (some? layout) (and (= type :frame) (ctl/any-layout? shape))) (update :reflow conj id))]
@@ -385,6 +518,7 @@
 
 (defn- op-delete
   [state op]
+  (props/check-shape-op! :delete nil op)
   (let [objects (objects-of state)
         id      (or (resolve-id state (:id op) "id") (error! "delete needs an id" {:field "id"}))
         _       (when-not (contains? objects id) (error! (str "Shape " id " not found on this page") {:field "id"}))
@@ -395,29 +529,48 @@
         (assoc :changes changes)
         (update :deleted into ids))))
 
+(defn image-refs
+  "Media ids that image fills in `ops` refer to, so the caller can fetch
+  their metadata before `build`. Invalid ids are left for `build` to report."
+  [ops]
+  (when (sequential? ops)
+    (into #{}
+          (keep (fn [op]
+                  (when (map? op)
+                    (let [image (or (:image op) (when (map? (:fill op)) (:image (:fill op))))]
+                      (when (string? image) (uuid/parse* image))))))
+          ops)))
+
 (defn build
   "Applies `ops` (seq of maps with keywordized keys) to the page objects.
-  Returns the state map; throws ex-info with a readable message on bad input."
-  [page-id objects ops]
-  (when-not (sequential? ops)
-    (error! "ops must be an array of operations" {:field "ops"}))
-  (let [changes (-> (pcb/empty-changes :mcp page-id)
-                    (pcb/with-objects objects))
-        init    {:changes changes :refs {} :created [] :deleted #{}
-                 :texts #{} :reflow #{} :modifs {}}]
-    (reduce (fn [state [idx op]]
-              (try
-                (case (some-> (:op op) str/lower)
-                  "create" (op-create state op)
-                  "update" (op-update state op)
-                  "delete" (op-delete state op)
-                  (error! (str "Unknown op " (pr-str (:op op)) ". Use create, update or delete") {:field "op"}))
-                (catch :default cause
-                  (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
-                                  (assoc (ex-data cause) :index idx)
-                                  cause)))))
-            init
-            (map-indexed vector ops))))
+  Returns the state map; throws ex-info with a readable message on bad input.
+
+  opts: `:fonts` the team's font families (`penpot-mcp.fonts/team-fonts`),
+  `:media` media id -> {:width :height :mtype} for image fills."
+  ([page-id objects ops] (build page-id objects ops nil))
+  ([page-id objects ops {:keys [fonts media]}]
+   (when-not (sequential? ops)
+     (error! "ops must be an array of operations" {:field "ops"}))
+   (let [changes (-> (pcb/empty-changes :mcp page-id)
+                     (pcb/with-objects objects))
+         init    {:changes changes :refs {} :created [] :deleted #{}
+                  :texts #{} :reflow #{} :modifs {} :contain #{}
+                  :fonts (vec fonts) :media (or media {})}]
+     (reduce (fn [state [idx op]]
+               (try
+                 (when-not (map? op)
+                   (error! "Each op must be an object like {\"op\": \"create\", ...}" {:field "op"}))
+                 (case (some-> (:op op) str str/lower)
+                   "create" (op-create state op)
+                   "update" (op-update state op)
+                   "delete" (op-delete state op)
+                   (error! (str "Unknown op " (pr-str (:op op)) ". Use create, update or delete") {:field "op"}))
+                 (catch :default cause
+                   (throw (ex-info (str "ops[" idx "]: " (ex-message cause))
+                                   (assoc (ex-data cause) :index idx)
+                                   cause)))))
+             init
+             (map-indexed vector ops)))))
 
 ;; --- text measuring with render-wasm (call after the scene and fonts are loaded)
 
@@ -565,11 +718,45 @@
             (fn [shape] (assoc shape :position-data (get pd-by-id (:id shape))))
             {:attrs #{:position-data}})))
 
+(defn- contain-transform
+  "Image transform (fractions of the shape box) that shows the whole image,
+  centered, at its aspect ratio."
+  [w h iw ih]
+  (when (and (pos? w) (pos? h) (pos? iw) (pos? ih))
+    (let [image-ratio (/ iw ih)
+          box-ratio   (/ w h)]
+      (if (> image-ratio box-ratio)
+        (let [th (/ box-ratio image-ratio)] {:x 0 :y (/ (- 1 th) 2) :width 1 :height th})
+        (let [tw (/ image-ratio box-ratio)] {:x (/ (- 1 tw) 2) :y 0 :width tw :height 1})))))
+
+(defn fit-images
+  "Sets the transform of the `contain` image fills set in this batch from the
+  shapes' final size (after layout), so the whole image shows."
+  [state]
+  (let [objects (objects-of state)
+        ids     (filterv #(contains? objects %) (:contain state))]
+    (if (empty? ids)
+      state
+      (update state :changes pcb/update-shapes ids
+              (fn [shape]
+                (let [{:keys [width height]} (:selrect shape)]
+                  (update shape :fills
+                          (fn [fills]
+                            (mapv (fn [fill]
+                                    (if-let [{iw :width ih :height} (:fill-image fill)]
+                                      (if-let [tf (contain-transform width height iw ih)]
+                                        (assoc-in fill [:fill-image :transform] tf)
+                                        (update fill :fill-image dissoc :transform))
+                                      fill))
+                                  fills)))))))))
+
 ;; --- summaries for the caller / the AI
 
 (defn- round [v] (when (number? v) (/ (js/Math.round (* v 100)) 100)))
 
 (defn- fill-color [shape] (some-> shape :fills first :fill-color))
+
+(defn- fill-image [shape] (some-> shape :fills first :fill-image :id str))
 
 (defn shape-summary
   "Compact, JSON-friendly description of a shape (x/y relative to its parent)."
@@ -585,6 +772,7 @@
       :width (round width)
       :height (round height)
       :fill (fill-color shape)
+      :image (fill-image shape)
       :text (when (cfh/text-shape? shape) (txt/content->text (:content shape)))
       :layout (when (ctl/flex-layout? shape)
                 (d/without-nils

@@ -27,10 +27,25 @@ const track = async (name, opts) => {
 export async function init(wasmDir, fontsDir) { calls.push(["init", wasmDir, fontsDir]); return true; }
 export async function rpc(ctx, command, params) {
   calls.push(["rpc", command, params, ctx]);
-  if (command === "get-all-projects") return [{ id: "p1", name: "Website", "team-name": "Alphanusa" }];
-  if (command === "get-project-files") return [{ id: "f1", name: "Landing", "modified-at": "2026-10-20T10:00:00Z" },
-                                               { id: "f2", name: "Pricing" }];
+  if (command === "get-all-projects") return [{ id: "p1", name: "Website", "team-name": "Alphanusa", "team-id": "t1" },
+                                              { id: "p2", name: "Drafts", "team-name": "Alphanusa", "team-id": "t1" }];
+  if (command === "get-project-files") {
+    if (params["project-id"] === "p2") return [];
+    return [{ id: "f1", name: "Landing", "modified-at": "2026-10-20T10:00:00Z" }, { id: "f2", name: "Pricing" }];
+  }
   throw new Error("unexpected " + command);
+}
+export async function filePages(opts) {
+  calls.push(["filePages", opts]);
+  return [{ id: "pg-" + opts.fileId, name: "Page 1" }, { id: "pg2-" + opts.fileId, name: "Screens" }];
+}
+export async function createProject(opts) { calls.push(["createProject", opts]); return { projectId: "p9", name: opts.name, teamId: opts.teamId ?? "t1" }; }
+export async function createFile(opts) { calls.push(["createFile", opts]); return { fileId: "f9", name: opts.name, pages: (opts.pages ?? ["Page 1"]).map((n, i) => ({ id: "pg" + i, name: n })) }; }
+export async function editPages(opts) { calls.push(["editPages", opts]); return { pages: [], saved: !opts.dryRun }; }
+export async function listFonts(opts) { calls.push(["listFonts", opts]); return { team: [], builtin: [], google: [{ family: "IBM Plex Sans" }], googleMatches: 1 }; }
+export async function uploadImage(opts) {
+  calls.push(["uploadImage", opts]);
+  return { id: "44444444-4444-4444-4444-444444444444", name: opts.name, width: 118, height: 32, mtype: opts.mimeType ?? "image/png" };
 }
 export async function pageSummary(opts) {
   calls.push(["pageSummary", opts]);
@@ -69,9 +84,19 @@ test("browser-free tools can be disabled", () => {
     assert.deepEqual(createHeadlessTools(fakeServer, env(fakeEngineDir(), { PENPOT_MCP_HEADLESS: "false" })), []);
 });
 
-test("registers the four browser-free tools", () => {
+test("registers the browser-free tools", () => {
     const names = createHeadlessTools(fakeServer, env(fakeEngineDir())).map((t) => t.getToolName());
-    assert.deepEqual(names, ["list_files", "get_page_overview", "render_shape", "edit_page"]);
+    assert.deepEqual(names, [
+        "list_files",
+        "get_page_overview",
+        "render_shape",
+        "edit_page",
+        "create_project",
+        "create_file",
+        "edit_pages",
+        "list_fonts",
+        "upload_image",
+    ]);
 });
 
 test("engine is located via PENPOT_MCP_ENGINE_DIR", () => {
@@ -83,9 +108,12 @@ test("list_files lists projects and files with ids", async () => {
     const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
     const res = await byName(tools, "list_files").execute({});
     const text = res.content[0].text as string;
-    assert.match(text, /## Alphanusa \/ Website/);
+    assert.match(text, /## Alphanusa \/ Website — projectId: p1, teamId: t1/);
     assert.match(text, /- Landing — fileId: f1 — modified 2026-10-20T10:00:00.000Z/);
     assert.match(text, /- Pricing — fileId: f2/);
+    // empty projects are listed too: new files can go there
+    assert.match(text, /## Alphanusa \/ Drafts — projectId: p2, teamId: t1\n\(no files\)/);
+    assert.doesNotMatch(text, /pages:/);
     const rpcCall = fake().calls.find((c) => c[0] === "rpc");
     assert.deepEqual(rpcCall[3], { baseUri: "https://penpot.example.com", token: "test-token" });
 });
@@ -96,6 +124,14 @@ test("list_files filters by search", async () => {
     const text = res.content[0].text as string;
     assert.match(text, /Pricing/);
     assert.doesNotMatch(text, /Landing/);
+});
+
+test("list_files lists pages on request", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const res = await byName(tools, "list_files").execute({ search: "landing", pages: true });
+    const text = res.content[0].text as string;
+    assert.match(text, /- Landing — fileId: f1.*\n  pages: Page 1 \(pageId: pg-f1\), Screens \(pageId: pg2-f1\)/);
+    assert.equal(fake().calls.filter((c) => c[0] === "filePages").length, 1);
 });
 
 test("render_shape defaults to the first board and returns an image", async () => {
@@ -164,4 +200,141 @@ test("in OAuth mode the request's own token is used, never a server-wide one", a
     const rpcCalls = fake().calls.filter((c) => c[0] === "rpc");
     assert.ok(rpcCalls.length > 0);
     assert.ok(rpcCalls.every((c) => c[3].token === "user-token"));
+});
+
+test("create_project, create_file, edit_pages and list_fonts pass their arguments to the engine", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+
+    const project = JSON.parse(
+        (await byName(tools, "create_project").execute({ name: "Media Proxy" })).content[0].text
+    );
+    assert.equal(project.projectId, "p9");
+    assert.deepEqual(fake().calls.find((c) => c[0] === "createProject")[1], {
+        ...ctx,
+        name: "Media Proxy",
+        teamId: undefined,
+    });
+
+    const file = JSON.parse(
+        (
+            await byName(tools, "create_file").execute({
+                projectId: "p9",
+                name: "Media Proxy UI",
+                pages: ["Design system", "Screens"],
+            })
+        ).content[0].text
+    );
+    assert.deepEqual(
+        file.pages.map((p: any) => p.name),
+        ["Design system", "Screens"]
+    );
+    assert.deepEqual(fake().calls.find((c) => c[0] === "createFile")[1].pages, ["Design system", "Screens"]);
+
+    const ops = [{ op: "add", name: "Archive" }];
+    const pages = JSON.parse(
+        (await byName(tools, "edit_pages").execute({ fileId: "f1", ops, dryRun: true })).content[0].text
+    );
+    assert.equal(pages.saved, false);
+    assert.deepEqual(fake().calls.find((c) => c[0] === "editPages")[1].ops, ops);
+
+    await byName(tools, "list_fonts").execute({ search: "plex", fileId: "f1", limit: 5 });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "listFonts")[1], {
+        ...ctx,
+        fileId: "f1",
+        search: "plex",
+        limit: 5,
+    });
+});
+
+const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+test("upload_image takes a url", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const res = await byName(tools, "upload_image").execute({
+        fileId: "f1",
+        url: "https://example.com/assets/logo%20dark.png",
+    });
+    const out = JSON.parse(res.content[0].text);
+    assert.equal(out.id, "44444444-4444-4444-4444-444444444444");
+    assert.match(out.usage, /"fill": \{"image": "44444444-4444-4444-4444-444444444444", "fit": "contain"\}/);
+    const call = fake().calls.find((c) => c[0] === "uploadImage")[1];
+    assert.equal(call.url, "https://example.com/assets/logo%20dark.png");
+    assert.equal(call.name, "logo dark.png");
+    assert.equal(call.data, undefined);
+});
+
+test("upload_image takes base64 bytes and detects their type", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    await byName(tools, "upload_image").execute({
+        fileId: "f1",
+        dataBase64: `data:image/png;base64,${PNG_1x1}`,
+        name: "Dot",
+    });
+    let call = fake().calls.find((c) => c[0] === "uploadImage")[1];
+    assert.equal(call.mimeType, "image/png");
+    assert.equal(call.name, "Dot");
+    assert.equal(Buffer.from(call.data).subarray(1, 4).toString("latin1"), "PNG");
+
+    // the declared type is corrected by the bytes
+    await byName(tools, "upload_image").execute({ fileId: "f1", dataBase64: PNG_1x1, mimeType: "image/jpeg" });
+    call = fake().calls.filter((c) => c[0] === "uploadImage")[1][1];
+    assert.equal(call.mimeType, "image/png");
+
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="118" height="32"/>').toString("base64");
+    await byName(tools, "upload_image").execute({ fileId: "f1", dataBase64: svg });
+    call = fake().calls.filter((c) => c[0] === "uploadImage")[2][1];
+    assert.equal(call.mimeType, "image/svg+xml");
+});
+
+test("upload_image rejects missing, double and non-image sources", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const upload = byName(tools, "upload_image");
+    const uploads = () => (fake()?.calls ?? []).filter((c) => c[0] === "uploadImage").length;
+    const before = uploads();
+    assert.match(
+        (await upload.execute({ fileId: "f1" })).content[0].text,
+        /exactly one image source: url or dataBase64\./
+    );
+    assert.match(
+        (await upload.execute({ fileId: "f1", url: "https://example.com/a.png", dataBase64: PNG_1x1 })).content[0].text,
+        /exactly one image source/
+    );
+    assert.match(
+        (await upload.execute({ fileId: "f1", dataBase64: Buffer.from("hello").toString("base64") })).content[0].text,
+        /Unsupported image type/
+    );
+    // no file system access on this server: filePath is not offered
+    assert.equal("filePath" in upload.getInputSchema(), false);
+    assert.match((await upload.execute({ fileId: "f1", filePath: "/etc/passwd" })).content[0].text, /not available/);
+    assert.equal(uploads(), before, "nothing was uploaded");
+});
+
+test("upload_image reads local files when the server has file system access", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "penpot-img-"));
+    const path = join(dir, "logo.png");
+    writeFileSync(path, Buffer.from(PNG_1x1, "base64"));
+    const server = { ...fakeServer, isFileSystemAccessEnabled: () => true } as any;
+    const tools = createHeadlessTools(server, env(fakeEngineDir()));
+    const upload = byName(tools, "upload_image");
+    assert.equal("filePath" in upload.getInputSchema(), true);
+    assert.match((await upload.execute({ fileId: "f1", filePath: "logo.png" })).content[0].text, /absolute path/);
+    await upload.execute({ fileId: "f1", filePath: path });
+    const call = fake().calls.find((c) => c[0] === "uploadImage")[1];
+    assert.equal(call.name, "logo");
+    assert.equal(call.mimeType, "image/png");
+});
+
+test("tools missing from an older engine build fail with a clear message", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "penpot-engine-old-"));
+    writeFileSync(
+        join(dir, "engine.js"),
+        "export async function init() { return true; }\nexport async function rpc() { return []; }\n"
+    );
+    const tools = createHeadlessTools(fakeServer, env(dir));
+    const res = await byName(tools, "create_project").execute({ name: "X" });
+    assert.match(
+        res.content[0].text,
+        /engine build on this server is too old for this tool \(it has no createProject\)/
+    );
 });

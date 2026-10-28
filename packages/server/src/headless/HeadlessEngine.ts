@@ -27,6 +27,40 @@ export interface PenpotEngineModule {
         opts: PenpotContext & { fileId: string; pageId?: string; rootId?: string; depth?: number }
     ): Promise<any>;
     applyOps(opts: PenpotContext & { fileId: string; pageId?: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
+    createProject(opts: PenpotContext & { name: string; teamId?: string }): Promise<any>;
+    createFile(opts: PenpotContext & { projectId: string; name: string; pages?: string[] }): Promise<any>;
+    filePages(opts: PenpotContext & { fileId: string }): Promise<{ id: string; name: string }[]>;
+    editPages(opts: PenpotContext & { fileId: string; ops: unknown[]; dryRun?: boolean }): Promise<any>;
+    listFonts(
+        opts: PenpotContext & { fileId?: string; teamId?: string; search?: string; limit?: number }
+    ): Promise<any>;
+    uploadImage(
+        opts: PenpotContext & {
+            fileId: string;
+            name: string;
+            url?: string;
+            data?: Uint8Array;
+            mimeType?: string;
+        }
+    ): Promise<{ id: string; name: string; width: number; height: number; mtype: string }>;
+}
+
+/**
+ * Returns `engine[name]`, failing with a clear message when the engine build predates it
+ * (server and engine are released together, but a local engine-dist can be older).
+ */
+export function engineFunction<K extends keyof PenpotEngineModule>(
+    engine: PenpotEngineModule,
+    name: K
+): PenpotEngineModule[K] {
+    const fn = engine[name];
+    if (typeof fn !== "function") {
+        throw new Error(
+            `The browser-free engine build on this server is too old for this tool (it has no ${String(name)}). ` +
+                "Rebuild the engine or fetch a newer engine-dist."
+        );
+    }
+    return (fn as Function).bind(engine) as PenpotEngineModule[K];
 }
 
 /**
