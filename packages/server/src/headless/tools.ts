@@ -157,7 +157,9 @@ export class PageOverviewTool extends HeadlessTool<PageOverviewArgs> {
     public getToolDescription(): string {
         return (
             "Describes the layer tree of a page (or of one shape's subtree) as compact JSON: id, name, type, " +
-            "x/y (relative to the parent), width/height, fill, text, flex layout and sizing, children. " +
+            "x/y (relative to the parent), width/height, fill, stroke, radius, opacity, text with its color and style " +
+            "(font, weight, size, line height), flex layout and sizing, children; library colors and typographies " +
+            "are named (fillAsset, stroke.asset, textColorAsset, textStyle.typography). " +
             `Use it before editing to find ids and understand the structure. ${BROWSER_FREE}`
         );
     }
@@ -257,8 +259,21 @@ create — {"op":"create","type":"frame"|"rect"|"ellipse"|"text"|"image"|"compon
     the copy with update ops on their ids (see get_page_overview).
 update — {"op":"update","id":<id or ref>, ...props}  (only the given props change; x/y/width/height move/resize)
 delete — {"op":"delete","id":<id or ref>}  (children are deleted too)
+move — {"op":"move","id":<id or ref>,"parent"?:<board/group id or ref, or null for the page root>,"index"?:0,"x"?,"y"?}
+  re-parents and/or reorders a shape, like dragging it in the layers panel. index counts like the layers panel:
+  0 = top layer = first item of a flex layout; without it, the shape goes to the end of a flex layout or on top of
+  its new siblings. Outside a layout it keeps its place on the page unless x/y (relative to the new parent) are given.
+  To move boards to another page or file use move_shapes.
 makeComponent — {"op":"makeComponent","id":<board id or ref>,"name"?:"Buttons / Primary"}  turns a board into a main
   component of this file's library (use the file as a library: share it with create_file shared, or link it).
+linkAssets — {"op":"linkAssets","scope"?:<board id or ref>|"page","colors"?:true,"typographies"?:false,
+  "prefer"?:{"#ffffff":"Surface"}}  links raw colors already used (fills, strokes, text colors; hex + opacity) and,
+  with typographies, text styles (font, weight, size, line height, letter spacing, case) to the library assets of
+  the file or its linked libraries with exactly that value, as if picked from the assets panel; values don't change.
+  A value several assets have is ambiguous: it is skipped unless "prefer" names the asset for that hex. The result
+  (linkAssets) lists per asset how many shapes were linked, plus the ambiguous and unmatched values with their
+  shape counts: add the missing colors with edit_library, or fix stray values, then run it again. Shapes inside
+  component copies follow their main and are left alone.
 
 Props:
   Colors ("fill", "stroke", "textColor") are "#rrggbb" or the name of a library color ("Brand / Primary"), which
@@ -278,6 +293,10 @@ Props:
     fontStyle ("normal"|"italic"), fontSize, textColor (or fill), textAlign (left|center|right|justify),
     lineHeight (multiplier, e.g. 1.4), letterSpacing, textTransform (none|uppercase|lowercase|capitalize),
     growType ("auto-width" default, "auto-height" when width is given: wraps at that width, "fixed").
+  tokens (design tokens, see get_tokens): {"fill"|"stroke"|"textColor": <color token>, "radius", "opacity", "width",
+    "height", "gap", "rowGap", "columnGap", "padding", "fontSize", "fontFamily", "fontWeight", "letterSpacing":
+    <token name>} sets the value the token resolves to and keeps the shape linked to the token, like applying it
+    from the Tokens panel (gap/padding need a flex layout). Setting a prop by hand later unlinks its token.
 Unknown or misplaced properties are rejected with an error naming them (dryRun too), never ignored.
 Text size, flex positions and hug sizes are computed automatically, as in the Penpot editor.`;
 
@@ -308,9 +327,10 @@ export class EditPageTool extends HeadlessTool<EditPageArgs> {
 
     public getToolDescription(): string {
         return (
-            "Creates, updates and deletes shapes on a Penpot page: boards, rectangles, ellipses, texts, images and " +
-            "copies of library components, with fills (colors, library colors or uploaded images), strokes, radius, " +
-            "fonts and library typographies, flex layout and sizing; turns boards into components. All operations " +
+            "Creates, updates, moves (re-parents / reorders) and deletes shapes on a Penpot page: boards, rectangles, " +
+            "ellipses, texts, images and copies of library components, with fills (colors, library colors or uploaded " +
+            "images), strokes, radius, fonts and library typographies, flex layout and sizing; turns boards into " +
+            "components; links raw colors and text styles to library assets (linkAssets). All operations " +
             "are saved together, and people who have the file open see the changes live. Returns the ids of created " +
             "shapes (by ref) and their computed geometry. Check the result with render_shape when the visual outcome " +
             `matters. ${BROWSER_FREE}`
@@ -1026,6 +1046,234 @@ export class EditLibraryTool extends HeadlessTool<EditLibraryArgs> {
     }
 }
 
+// ---------------------------------------------------------------- move_shapes
+
+export class MoveShapesArgs {
+    static schema = {
+        fileId: FILE_ID,
+        ids: z
+            .array(penpotId())
+            .min(1)
+            .max(200)
+            .describe(
+                "Shapes to move or copy, usually top-level boards (children go with them), all on one page. " +
+                    "A shape whose ancestor is also listed goes with that ancestor."
+            ),
+        pageId: penpotId().optional().describe("Page the shapes are on. Optional: found from the ids."),
+        toPageId: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("Target page: its id, or its name (see list_files with pages, or create pages with edit_pages)."),
+        toFileId: penpotId()
+            .optional()
+            .describe("Another file of the same team to copy the shapes to (mode copy). Optional: the same file."),
+        mode: z
+            .enum(["move", "copy"])
+            .default("move")
+            .describe(
+                "move: the shapes leave their page and keep their ids (same file only). copy: new shapes with new " +
+                    "ids, the originals stay."
+            ),
+        x: z
+            .number()
+            .optional()
+            .describe("New x of the first shape (on the target page); the others keep their offsets."),
+        y: z.number().optional().describe("New y of the first shape; the others keep their offsets."),
+        dryRun: z
+            .boolean()
+            .default(false)
+            .describe("When true, checks and computes the result without saving (and without copying images)."),
+    };
+    fileId!: string;
+    ids!: string[];
+    pageId?: string;
+    toPageId!: string;
+    toFileId?: string;
+    mode: "move" | "copy" = "move";
+    x?: number;
+    y?: number;
+    dryRun: boolean = false;
+}
+
+export class MoveShapesTool extends HeadlessTool<MoveShapesArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, MoveShapesArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "move_shapes";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Moves boards (or other shapes, with their children) to another page of the same file, or copies them to " +
+            "a page of the same or another file of the team — e.g. to sort screens into pages, or to put a design " +
+            "system's boards into a library file. move keeps ids, child order, layouts, images and library links; main " +
+            "components keep working; flows and guides of moved boards move too; prototype links that would cross " +
+            "pages are removed. copy duplicates like paste: in another file, images are copied into it, library colors " +
+            "and typographies of the source file are relinked to the target's assets with the same names (others keep " +
+            "their raw value and are reported under assets.unlinked), main components become components of the target " +
+            "and copies of them are relinked; copies of components the target can't reach are detached. Returns the " +
+            "map of old ids to new ids, for later edit_page calls. Within one page use edit_page's move op instead. " +
+            BROWSER_FREE
+        );
+    }
+
+    protected async executeCore(args: MoveShapesArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.wasm((engine) =>
+            engineFunction(
+                engine,
+                "moveShapes"
+            )({
+                ...ctx,
+                fileId: args.fileId,
+                pageId: args.pageId,
+                ids: args.ids,
+                toPageId: args.toPageId,
+                toFileId: args.toFileId,
+                mode: args.mode ?? "move",
+                x: args.x,
+                y: args.y,
+                dryRun: args.dryRun ?? false,
+            })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
+// ----------------------------------------------------------------- get_tokens
+
+export class GetTokensArgs {
+    static schema = {
+        fileId: FILE_ID,
+        set: z.string().optional().describe("Only the tokens of this set (name)."),
+        type: z
+            .string()
+            .optional()
+            .describe('Only tokens of this type, e.g. "color", "spacing", "border-radius", "typography".'),
+        search: z.string().optional().describe("Only tokens whose name contains this."),
+        limit: z
+            .number()
+            .int()
+            .min(0)
+            .max(2000)
+            .default(200)
+            .describe("Maximum tokens listed (themes and sets are all listed)."),
+    };
+    fileId!: string;
+    set?: string;
+    type?: string;
+    search?: string;
+    limit: number = 200;
+}
+
+export class GetTokensTool extends HeadlessTool<GetTokensArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, GetTokensArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "get_tokens";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Lists the design tokens of a file, as in the Tokens panel: themes (group, name, sets, active), sets " +
+            "(active, token count) and tokens (set, name, type, value as written and the value it resolves to — " +
+            "references and arithmetic computed). When the file takes its tokens from a library, they are that " +
+            `library's (tokensSource). ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: GetTokensArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.backend((engine) =>
+            engineFunction(
+                engine,
+                "getTokens"
+            )({
+                ...ctx,
+                fileId: args.fileId,
+                set: args.set,
+                type: args.type,
+                search: args.search,
+                limit: args.limit ?? 200,
+            })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
+// ---------------------------------------------------------------- edit_tokens
+
+const TOKEN_OPS_DESCRIPTION = `Token operations applied in order, saved together. Each is an object with "op":
+  {"op":"addSet","name":"core","description"?,"active"?:true}   (a name with "/" puts the set in a group: "brand/light")
+  {"op":"updateSet","set":<name or id>,"name"?,"description"?,"active"?}
+  {"op":"deleteSet","set":<name or id>}
+  {"op":"addTheme","group"?:"Mode","name":"Light","sets"?:["core","light"],"description"?,"active"?:true}
+  {"op":"updateTheme","theme":<"group/name", name or id>,"group"?,"name"?,"sets"?,"description"?,"active"?}
+  {"op":"deleteTheme","theme":<"group/name", name or id>}
+  {"op":"addToken","set":<name or id>,"type":"color","name":"color.primary","value":"#0066ff","description"?}
+  {"op":"updateToken","set","token":<name or id>,"name"?,"value"?,"description"?}   (the type can't change)
+  {"op":"deleteToken","set","token"}
+Types: color, dimensions, spacing, sizing, border-radius, stroke-width, opacity (0-1), rotation, number, font-family
+  (["Inter", "sans-serif"] or "Inter, sans-serif"), font-size, font-weight, letter-spacing, text-case,
+  text-decoration, typography ({"fontFamily","fontSize","fontWeight","lineHeight","letterSpacing",...}),
+  shadow ([{"offsetX","offsetY","blur","spread","color","inset"?}]), boolean, string, other (DTCG names like
+  "borderRadius" or "fontSizes" work too). Names use dots for groups ("space.md").
+Values may refer to other tokens and compute: "{color.primary}", "{space.md} * 2".
+Activating a theme activates its sets and turns off the other themes of its group; activating a set directly turns
+all themes off, as in the Tokens panel.`;
+
+export class EditTokensArgs {
+    static schema = {
+        fileId: FILE_ID,
+        ops: z.array(z.record(z.string(), z.any())).min(1).max(500).describe(TOKEN_OPS_DESCRIPTION),
+        dryRun: z.boolean().default(false).describe("When true, checks the operations without saving."),
+    };
+    fileId!: string;
+    ops!: Record<string, unknown>[];
+    dryRun: boolean = false;
+}
+
+export class EditTokensTool extends HeadlessTool<EditTokensArgs> {
+    constructor(mcpServer: PenpotMcpServer, engine: HeadlessEngine, credentials: PenpotCredentials) {
+        super(mcpServer, EditTokensArgs.schema, engine, credentials);
+    }
+
+    public getToolName(): string {
+        return "edit_tokens";
+    }
+
+    public getToolDescription(): string {
+        return (
+            "Creates, updates and deletes design token sets, themes and tokens of a file, and switches themes and sets " +
+            "on or off, as in the Tokens panel; shapes using a token whose value changes follow it. Names, values " +
+            "and references are checked like the panel does " +
+            "(duplicate names, broken or circular references, invalid values). Returns the ids of what was created " +
+            `and the themes and sets after the change. ${BROWSER_FREE}`
+        );
+    }
+
+    protected async executeCore(args: EditTokensArgs): Promise<ToolResponse> {
+        const ctx = this.credentials.context();
+        const result = await this.engine.wasm((engine) =>
+            engineFunction(
+                engine,
+                "editTokens"
+            )({
+                ...ctx,
+                fileId: args.fileId,
+                ops: args.ops,
+                dryRun: args.dryRun ?? false,
+            })
+        );
+        return new TextResponse(JSON.stringify(result));
+    }
+}
+
 // ------------------------------------------------------------------ factory
 
 /**
@@ -1056,6 +1304,9 @@ export function createHeadlessTools(
         new LinkLibraryTool(mcpServer, engine, credentials),
         new GetLibraryTool(mcpServer, engine, credentials),
         new EditLibraryTool(mcpServer, engine, credentials),
+        new MoveShapesTool(mcpServer, engine, credentials),
+        new GetTokensTool(mcpServer, engine, credentials),
+        new EditTokensTool(mcpServer, engine, credentials),
     ];
 }
 
@@ -1063,10 +1314,11 @@ export function createHeadlessTools(
 export const HEADLESS_INSTRUCTIONS =
     "\n\nBrowser-free tools are also available: list_files, get_page_overview, render_shape, edit_page, " +
     "create_project, create_file, edit_pages, list_fonts, upload_image, upload_font, import_library, link_library, " +
-    "get_library and edit_library work directly against the Penpot " +
+    "get_library, edit_library, move_shapes, get_tokens and edit_tokens work directly against the Penpot " +
     "backend, without the Penpot MCP plugin and without opening Penpot in a browser. Prefer them when no plugin " +
     "session is connected. Typical flow: list_files → get_page_overview → edit_page → render_shape (only when you " +
     "need to see the result). For a new design: create_project (only if the user wants a new project) → " +
     "create_file with named pages → list_fonts / upload_font / upload_image for the design system's fonts and " +
     "images → import_library or link_library for a .penpot UI kit, get_library to see its components, colors and " +
-    "typographies → edit_page using them by name.";
+    "typographies → edit_page using them by name. Design tokens: get_tokens / edit_tokens. To sort boards into " +
+    "pages or put them in a library file: move_shapes.";

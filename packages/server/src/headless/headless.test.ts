@@ -56,6 +56,12 @@ export async function importLibrary(opts) {
 export async function linkLibrary(opts) { await track("linkLibrary", opts); return { linked: !opts.unlink, synced: !!opts.sync }; }
 export async function libraryAssets(opts) { calls.push(["libraryAssets", opts]); return [{ fileId: opts.fileId, components: [] }]; }
 export async function editLibrary(opts) { await track("editLibrary", opts); return { changes: 1, saved: !opts.dryRun }; }
+export async function moveShapes(opts) {
+  await track("moveShapes", opts);
+  return { mode: opts.mode, ids: Object.fromEntries(opts.ids.map((id) => [id, opts.mode === "copy" ? "new-" + id : id])), saved: !opts.dryRun };
+}
+export async function getTokens(opts) { calls.push(["getTokens", opts]); return { themes: [], sets: [{ name: "core" }], tokens: [], totalTokens: 0 }; }
+export async function editTokens(opts) { calls.push(["editTokens", opts]); return { changes: opts.ops.length, saved: !opts.dryRun }; }
 export async function uploadImage(opts) {
   calls.push(["uploadImage", opts]);
   return { id: "44444444-4444-4444-4444-444444444444", name: opts.name, width: 118, height: 32, mtype: opts.mimeType ?? "image/png" };
@@ -114,6 +120,9 @@ test("registers the browser-free tools", () => {
         "link_library",
         "get_library",
         "edit_library",
+        "move_shapes",
+        "get_tokens",
+        "edit_tokens",
     ]);
 });
 
@@ -477,6 +486,60 @@ test("link_library, get_library and edit_library pass their arguments; sync and 
     ]);
     assert.deepEqual(fake().calls.find((c) => c[0] === "editLibrary")[1].ops, ops);
     assert.equal(fake().maxActive, 1);
+});
+
+test("move_shapes passes its arguments and uses the WASM gate", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    const [res] = await Promise.all([
+        byName(tools, "move_shapes").execute({
+            fileId: "f1",
+            ids: ["b1", "b2"],
+            toPageId: "Archive",
+            toFileId: "f2",
+            mode: "copy",
+            x: 0,
+            y: 40,
+        }),
+        byName(tools, "render_shape").execute({ fileId: "f1", pageId: "p", shapeId: "s" }),
+    ]);
+    assert.deepEqual(fake().calls.find((c) => c[0] === "moveShapes")[1], {
+        ...ctx,
+        fileId: "f1",
+        pageId: undefined,
+        ids: ["b1", "b2"],
+        toPageId: "Archive",
+        toFileId: "f2",
+        mode: "copy",
+        x: 0,
+        y: 40,
+        dryRun: false,
+    });
+    assert.deepEqual(JSON.parse(res.content[0].text).ids, { b1: "new-b1", b2: "new-b2" });
+    assert.equal(fake().maxActive, 1);
+    await byName(tools, "move_shapes").execute({ fileId: "f1", ids: ["b1"], toPageId: "p2" });
+    assert.equal(fake().calls.filter((c) => c[0] === "moveShapes")[1][1].mode, "move");
+});
+
+test("get_tokens and edit_tokens pass their arguments", async () => {
+    const tools = createHeadlessTools(fakeServer, env(fakeEngineDir()));
+    const ctx = { baseUri: "https://penpot.example.com", token: "test-token" };
+    const res = await byName(tools, "get_tokens").execute({ fileId: "f1", type: "color", search: "brand" });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "getTokens")[1], {
+        ...ctx,
+        fileId: "f1",
+        set: undefined,
+        type: "color",
+        search: "brand",
+        limit: 200,
+    });
+    assert.equal(JSON.parse(res.content[0].text).sets[0].name, "core");
+    const ops = [
+        { op: "addSet", name: "core", active: true },
+        { op: "addToken", set: "core", type: "color", name: "color.primary", value: "#0066ff" },
+    ];
+    await byName(tools, "edit_tokens").execute({ fileId: "f1", ops, dryRun: true });
+    assert.deepEqual(fake().calls.find((c) => c[0] === "editTokens")[1], { ...ctx, fileId: "f1", ops, dryRun: true });
 });
 
 test("create_file can publish the new file as a shared library", async () => {
