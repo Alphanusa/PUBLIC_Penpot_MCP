@@ -420,9 +420,9 @@ await expectError("prop and token", () => engine.applyOpsOffline([{ op: "create"
 await expectError("unknown token", () => engine.applyOpsOffline([{ op: "create", type: "rect", tokens: { fill: "nope" } }], tokenOpts),
                   /No token named "nope"/);
 await expectError("gap without layout", () => engine.applyOpsOffline([{ op: "create", type: "frame", tokens: { gap: "space.md" } }], tokenOpts),
-                  /gap and padding tokens apply to boards with a flex layout/);
-await expectError("unknown token prop", () => engine.applyOpsOffline([{ op: "create", type: "rect", tokens: { margin: "space.md" } }], tokenOpts),
-                  /Unknown property "margin" in "tokens"/);
+                  /gap and padding tokens apply to boards with a flex or grid layout/);
+await expectError("unknown token prop", () => engine.applyOpsOffline([{ op: "create", type: "rect", tokens: { blur: "space.md" } }], tokenOpts),
+                  /Unknown property "blur" in "tokens"/);
 
 console.log(JSON.stringify({ ok: failures.length === 0, failures }, null, 2));
 if (failures.length) process.exit(1);

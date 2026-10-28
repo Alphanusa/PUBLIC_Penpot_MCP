@@ -19,18 +19,25 @@
 
 (def layout-props
   [:type :direction :gap :rowGap :columnGap :padding :alignItems :justifyContent
-   :alignContent :wrap])
+   :alignContent :wrap :columns :rows :justifyItems])
 
-(def stroke-props [:color :width :align :opacity])
+(def stroke-props [:color :gradient :width :align :opacity :style])
 (def sizing-props [:h :v])
-(def fill-props [:color :image :fit :opacity])
+(def fill-props [:color :gradient :image :fit :opacity])
 
-(def ^:private geometry-props [:x :y :width :height])
-(def ^:private common-props [:name :opacity :visible :stroke :sizing :tokens])
+(def ^:private geometry-props [:x :y :width :height :rotation])
+(def ^:private item-props
+  "Options of a shape inside a layout, and constraints outside layouts."
+  [:margin :minWidth :maxWidth :minHeight :maxHeight :alignSelf :absolute :zIndex :constraints])
+
+(def ^:private common-props
+  (into [:name :opacity :visible :stroke :sizing :tokens :shadow :blur :backgroundBlur :blendMode
+         :interactions :exports]
+        item-props))
 (def ^:private box-fill-props [:fill :fillOpacity])
 (def ^:private text-props
-  [:text :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
-   :lineHeight :letterSpacing :textTransform :growType])
+  [:text :spans :typography :fontFamily :fontSize :fontWeight :fontStyle :textColor :fill :textAlign
+   :lineHeight :letterSpacing :textTransform :textDecoration :verticalAlign :growType])
 
 (def ^:private shape-props
   "Props per shape type. `:image` is the `type: \"image\"` sugar of create
@@ -41,8 +48,15 @@
    :text   (vec (concat geometry-props common-props text-props))
    :image  (vec (concat geometry-props common-props [:image :fit :fillOpacity :radius]))
    ;; `type: "component"` of create: a copy of a library component
-   :component [:component :variant :texts :x :y :width :height :name :opacity :visible :sizing]
-   ;; groups, paths, booleans, … (update only)
+   :component (into [:component :variant :texts :x :y :width :height :name :opacity :visible :sizing
+                     :interactions :exports]
+                    item-props)
+   ;; `type: "svg"` of create: SVG markup imported as vectors (a group)
+   :svg    (into [:svg :x :y :width :height :name :opacity :visible :sizing :color] item-props)
+   :path   (vec (concat geometry-props common-props box-fill-props [:d :color]))
+   :group  (vec (concat geometry-props common-props [:color]))
+   :bool   (vec (concat geometry-props common-props box-fill-props [:color]))
+   ;; other shapes (svg elements, …) (update only)
    :other  (vec (concat geometry-props common-props box-fill-props))})
 
 (defn- props-for [type] (or (get shape-props type) (:other shape-props)))
@@ -54,7 +68,7 @@
 
 (def ^:private type-names
   {:frame "board (frame)" :rect "rectangle" :circle "ellipse" :text "text" :image "image"
-   :component "component instance"})
+   :component "component instance" :svg "svg" :path "path" :group "group" :bool "boolean shape"})
 
 (def ^:private any-shape-prop
   (into #{} (mapcat val) shape-props))
@@ -162,5 +176,6 @@
         (check-keys! (:stroke op) stroke-props "in \"stroke\""))
       (when (map? (:sizing op))
         (check-keys! (:sizing op) sizing-props "in \"sizing\""))
-      (when (map? (:fill op))
-        (check-keys! (:fill op) fill-props "in \"fill\"")))))
+      (doseq [f (if (sequential? (:fill op)) (:fill op) [(:fill op)])
+              :when (map? f)]
+        (check-keys! f fill-props "in \"fill\"")))))

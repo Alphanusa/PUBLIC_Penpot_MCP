@@ -39,6 +39,12 @@
   [s]
   (-> (str s) str/lower (str/replace #"[\s_\-]+" "")))
 
+(defn key-str
+  "A JSON object key as a string: keywordized keys lose the part before a
+  slash with `name` (\"Icon/Left\" -> \"Left\"), so take the whole key."
+  [k]
+  (if (keyword? k) (subs (str k) 1) (str k)))
+
 (defn map-acc
   "Maps `f` ([acc x] -> [acc x']) over `xs` into a vector, threading `acc`.
   Returns [acc xs']."

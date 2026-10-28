@@ -9,9 +9,9 @@ layout and rendering) — packaged as the [engine](engine/README.md).
 | Tool | What it does |
 |---|---|
 | `list_files` | Teams, projects and files the user can edit, with ids (optionally each file's pages) |
-| `get_page_overview` | Compact layer tree: ids, geometry, fill, stroke, radius, text with its color and style, flex layout, sizing; library colors, typographies and applied tokens by name |
-| `edit_page` | Create / update / move (re-parent, reorder) / delete boards, rectangles, ellipses, texts, images and copies of library components; color, library color and image fills, strokes, radius, fonts and library typographies, design tokens, flex layout, sizing; turn boards into components; link raw colors and text styles to library assets (`linkAssets`) — saved in one `update-file`, live for people who have the file open. Unknown or misplaced properties are rejected, never ignored |
-| `render_shape` | Renders a board with Penpot's renderer and returns it as an image for the AI to check |
+| `get_page_overview` | Compact layer tree: ids, geometry, fill (gradients), stroke, radius, effects, text with its color, style and spans, flex and grid layouts, grid cells, layout item options, constraints, components and variants, interactions, export settings; library colors, typographies, components and applied tokens by name; the page's prototype flows |
+| `edit_page` | Create / update / move / delete boards, rectangles, ellipses, texts (rich text), images, SVG imported as editable vectors, paths, groups, boolean shapes and copies of components; color, gradient, library color and image fills, strokes, shadows, blur, blend modes, fonts and library typographies, design tokens, flex and grid layouts, layout item options, constraints, rotation; components, variant sets (`makeVariants`, `setVariant`), `swap`, `detach`, `resetOverrides`, annotations; prototype interactions and flows; export settings; `linkAssets` — saved in one `update-file`, live for people who have the file open. Editing a main updates its copies on every page. Unknown or misplaced properties are rejected, never ignored |
+| `render_shape` | Renders a board with Penpot's renderer and returns it as an image for the AI to check; `theme` previews a token theme (e.g. dark mode) without changing the file |
 | `create_project` | New project in a team (the account's default team when none is given) |
 | `create_file` | New file in a project, optionally with named pages, optionally published as a shared library |
 | `edit_pages` | Add, rename, delete and reorder pages |
@@ -23,8 +23,13 @@ layout and rendering) — packaged as the [engine](engine/README.md).
 | `get_library` | Components (with variants and size), colors and typographies a file can use, from its own and its linked libraries |
 | `edit_library` | Adds / updates / deletes the colors and typographies of a file's own library; shapes using an updated asset follow it |
 | `move_shapes` | Moves boards (with their children) to another page of the file, keeping ids, layouts, images and library links, or copies them to a page of the same or another file of the team (images copied, library refs relinked by name, main components recreated); returns old id → new id |
-| `get_tokens` | Design tokens of a file: themes, sets (active or not) and tokens with the value each resolves to |
-| `edit_tokens` | Adds / updates / deletes token sets, themes and tokens and switches themes and sets on or off, checked like the Tokens panel |
+| `get_tokens` | Design tokens of a file: themes, sets (active or not) and tokens with the value each resolves to; or all of them as W3C design tokens (DTCG) JSON |
+| `edit_tokens` | Adds / updates / deletes token sets, themes and tokens, switches themes and sets on or off, and imports DTCG / Tokens Studio JSON (merge or replace), checked like the Tokens panel |
+| `audit_design` | Checks a file against its design system: raw colors and text styles not linked to the library or tokens (with the asset to link), spacing and radius off the token scale, WCAG AA text contrast, repeated structures that should be components, variants with empty values, default names, layers outside boards, rows placed by hand; with a score, the palette and token coverage |
+| `export_assets` | Exports a shape as PNG, JPEG, WebP, SVG or PDF at any scale, from its export settings or given formats |
+| `file_versions` | Lists, saves, renames, deletes, locks and restores file versions (History panel) |
+| `comments` | Lists comment threads with their comments, starts a thread on a shape, replies, resolves, reopens, deletes |
+| `design_guide` | How to build with these tools, with examples: the design system workflow, components and variants, vectors, effects, text, layout, tokens, prototypes |
 
 With these an AI client can go from nothing to "project → file → named pages → boards"
 without anyone opening Penpot, with the team's own fonts and with libraries: its own
@@ -32,8 +37,14 @@ without anyone opening Penpot, with the team's own fonts and with libraries: its
 Library assets are used by name ("Buttons / Primary", "Brand / Primary", "Heading / H1")
 and stay linked like assets applied from the assets panel. Shapes drawn with raw values can
 be linked to the library afterwards (`linkAssets`). Design tokens are applied with
-`"tokens": {"fill": "color.primary", "padding": "space.md"}` and recorded on the shape like
-the Tokens panel does, so token edits in Penpot update them.
+`"tokens": {"fill": "color.primary", "padding": "space.md", "typography": "type.body"}` and
+recorded on the shape like the Tokens panel does, so token edits and theme switches update
+them.
+
+That covers a whole design system: tokens with light/dark themes (or imported from DTCG
+JSON), a component library with variant sets and icons imported from SVG, screens built from
+copies with flex and grid layouts, prototypes, and a check with `audit_design` — see
+`design_guide` (topic `workflow`).
 
 The plugin-based tools (`execute_code`, `export_shape`, …) keep working as upstream when a
 plugin session is connected.
@@ -67,11 +78,12 @@ is then ignored.
 
 ## Limits (for now)
 
-- Supported shapes/properties: see "Supported now" in [engine/README.md](engine/README.md);
-  grid layout, groups, paths and SVG import as editable vectors are not yet supported (an
-  SVG can be uploaded and used as an image fill). Component copies can be created and
-  overridden (texts, size, layers by id); swapping components and editing main components
-  beyond what edit_page does on their boards are not.
+- Supported shapes/properties: see "Supported now" in [engine/README.md](engine/README.md).
+  Penpot's own SVG import is used: bitmaps embedded in an SVG are skipped (upload them with
+  `upload_image`). Path editing beyond replacing `d`, masks, and texts on paths are not
+  supported.
+- Copies follow edits of their main within the file; files that link the library get them
+  with `link_library` sync (or "library updates" in Penpot).
 - `.penpot` imports and chunked uploads need Penpot 2.15+ (fonts 2.18+ use chunked
   uploads only); the deploy bundle uses 2.18.4.
 - Google fonts are loaded through the Penpot instance's `/internal/gfonts/font` proxy, like
@@ -80,12 +92,14 @@ is then ignored.
 - Renaming or deleting projects and files is left to people in Penpot.
 - Token values are resolved here for references and arithmetic on numbers with one unit
   (`{space.md} * 2`, rem counted as 16px); color modifiers and other Style Dictionary
-  transforms are not. Tokens can set fill, stroke and text colors, radius, opacity,
-  width/height, flex gap/padding, font size, family, weight and letter spacing; shadows,
-  stroke widths, rotation and typography tokens on shapes are not applied yet. A file whose
-  tokens come from a library (its tokens source) can only read them.
+  transforms are not. A file whose tokens come from a library (its tokens source) can only
+  read them.
+- `audit_design` checks what can be read from the file: contrast is computed against the
+  solid fill behind a text (images and gradients behind it are not measured), and
+  "repeated structure" is a heuristic.
 - `move_shapes` moves within one file (to another file it copies); flows and guides of
   moved boards move along, prototype links that would cross pages are removed.
+- Comments are plain text (no mentions).
 - Renders and edits share one render-wasm instance and run one at a time.
 
 ## Where the code lives
