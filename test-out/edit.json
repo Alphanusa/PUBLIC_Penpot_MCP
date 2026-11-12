@@ -1,0 +1,1943 @@
+{
+  "changes": 51,
+  "created": {
+    "desc1": "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+    "card1": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+    "desc2": "b71ff22c-fa83-808b-8008-ef2536db96c9",
+    "price0": "b71ff22c-fa83-808b-8008-ef2536d5b634",
+    "price2": "b71ff22c-fa83-808b-8008-ef2536da248c",
+    "section": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+    "price1": "b71ff22c-fa83-808b-8008-ef2536d871ac",
+    "title": "b71ff22c-fa83-808b-8008-ef2536d36f4f",
+    "name2": "b71ff22c-fa83-808b-8008-ef2536d9f840",
+    "row": "b71ff22c-fa83-808b-8008-ef2536d42326",
+    "card0": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+    "name0": "b71ff22c-fa83-808b-8008-ef2536d51c2b",
+    "desc0": "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+    "tmp": "b71ff22c-fa83-808b-8008-ef2536dc009a",
+    "card2": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+    "name1": "b71ff22c-fa83-808b-8008-ef2536d70b4c"
+  },
+  "createdIds": [
+    "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+    "b71ff22c-fa83-808b-8008-ef2536d36f4f",
+    "b71ff22c-fa83-808b-8008-ef2536d42326",
+    "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+    "b71ff22c-fa83-808b-8008-ef2536d51c2b",
+    "b71ff22c-fa83-808b-8008-ef2536d5b634",
+    "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+    "b71ff22c-fa83-808b-8008-ef2536d6a826",
+    "b71ff22c-fa83-808b-8008-ef2536d70b4c",
+    "b71ff22c-fa83-808b-8008-ef2536d871ac",
+    "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+    "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+    "b71ff22c-fa83-808b-8008-ef2536d9f840",
+    "b71ff22c-fa83-808b-8008-ef2536da248c",
+    "b71ff22c-fa83-808b-8008-ef2536db96c9",
+    "b71ff22c-fa83-808b-8008-ef2536dc009a"
+  ],
+  "deleted": [
+    "b71ff22c-fa83-808b-8008-ef2536dc009a"
+  ],
+  "components": null,
+  "shapes": [
+    {
+      "y": 0,
+      "sizing": {
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 24,
+          "column-gap": 24
+        },
+        "padding": {
+          "p1": 32,
+          "p2": 32,
+          "p3": 32,
+          "p4": 32
+        }
+      },
+      "name": "Pricing",
+      "fill": "#f4f1ea",
+      "width": 720,
+      "type": "frame",
+      "id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "x": 0,
+      "height": 289
+    },
+    {
+      "y": 32,
+      "name": "Pilih paket",
+      "width": 153,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "700",
+        "fontSize": 32,
+        "lineHeight": 1.2
+      },
+      "textColor": "#1f1e1d",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d36f4f",
+      "x": 32,
+      "height": 38,
+      "text": "Pilih paket"
+    },
+    {
+      "y": 94,
+      "sizing": {
+        "h": "fix",
+        "v": "auto"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "row",
+        "gap": {
+          "row-gap": 16,
+          "column-gap": 16
+        },
+        "padding": {
+          "p1": 0,
+          "p2": 0,
+          "p3": 0,
+          "p4": 0
+        }
+      },
+      "name": "Cards",
+      "width": 656,
+      "type": "frame",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "x": 32,
+      "height": 163
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "stroke": {
+        "color": "#e5e2da",
+        "width": 1,
+        "align": "inner"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Basic",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "radius": 12,
+      "id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "x": 0,
+      "height": 163
+    },
+    {
+      "y": 20,
+      "name": "Basic",
+      "width": 42,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "600",
+        "fontSize": 18,
+        "lineHeight": 1.2
+      },
+      "textColor": "#1f1e1d",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d51c2b",
+      "x": 20,
+      "height": 22,
+      "text": "Basic"
+    },
+    {
+      "y": 50,
+      "name": "Rp 49rb",
+      "width": 97,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "700",
+        "fontSize": 28,
+        "lineHeight": 1.2
+      },
+      "textColor": "#3366ff",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d5b634",
+      "x": 20,
+      "height": 34,
+      "text": "Rp 49rb"
+    },
+    {
+      "y": 92,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk mencoba. Satu proyek dan...",
+      "width": 168,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "400",
+        "fontSize": 14,
+        "lineHeight": 1.2
+      },
+      "textColor": "#5f5e5a",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk mencoba. Satu proyek dan sampai tiga anggota tim."
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "stroke": {
+        "color": "#e5e2da",
+        "width": 1,
+        "align": "inner"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Pro",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "radius": 12,
+      "id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "x": 224,
+      "height": 163
+    },
+    {
+      "y": 20,
+      "name": "Pro",
+      "width": 29,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "600",
+        "fontSize": 18,
+        "lineHeight": 1.2
+      },
+      "textColor": "#1f1e1d",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d70b4c",
+      "x": 20,
+      "height": 22,
+      "text": "Pro"
+    },
+    {
+      "y": 50,
+      "name": "Rp 149rb",
+      "width": 112,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "700",
+        "fontSize": 28,
+        "lineHeight": 1.2
+      },
+      "textColor": "#3366ff",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d871ac",
+      "x": 20,
+      "height": 34,
+      "text": "Rp 149rb"
+    },
+    {
+      "y": 92,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk tim kecil yang butuh...",
+      "width": 168,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "400",
+        "fontSize": 14,
+        "lineHeight": 1.2
+      },
+      "textColor": "#5f5e5a",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk tim kecil yang butuh proyek tanpa batas dan riwayat versi."
+    },
+    {
+      "y": 0,
+      "sizing": {
+        "h": "fill",
+        "v": "auto"
+      },
+      "stroke": {
+        "color": "#e5e2da",
+        "width": 1,
+        "align": "inner"
+      },
+      "layout": {
+        "type": "flex",
+        "direction": "column",
+        "gap": {
+          "row-gap": 8,
+          "column-gap": 8
+        },
+        "padding": {
+          "p1": 20,
+          "p2": 20,
+          "p3": 20,
+          "p4": 20
+        }
+      },
+      "name": "Card Bisnis",
+      "fill": "#ffffff",
+      "width": 208,
+      "type": "frame",
+      "radius": 12,
+      "id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "x": 448,
+      "height": 155
+    },
+    {
+      "y": 20,
+      "name": "Bisnis",
+      "width": 47,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "600",
+        "fontSize": 18,
+        "lineHeight": 1.2
+      },
+      "textColor": "#1f1e1d",
+      "id": "b71ff22c-fa83-808b-8008-ef2536d9f840",
+      "x": 20,
+      "height": 22,
+      "text": "Bisnis"
+    },
+    {
+      "y": 50,
+      "name": "Rp 0",
+      "width": 137,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "700",
+        "fontSize": 22,
+        "lineHeight": 1.2
+      },
+      "textColor": "#3366ff",
+      "id": "b71ff22c-fa83-808b-8008-ef2536da248c",
+      "x": 20,
+      "height": 26,
+      "text": "Hubungi kami"
+    },
+    {
+      "y": 84,
+      "sizing": {
+        "h": "fill"
+      },
+      "name": "Untuk organisasi: SSO, audit...",
+      "width": 168,
+      "type": "text",
+      "textStyle": {
+        "fontFamily": "Source Sans Pro",
+        "fontWeight": "400",
+        "fontSize": 14,
+        "lineHeight": 1.2
+      },
+      "textColor": "#5f5e5a",
+      "id": "b71ff22c-fa83-808b-8008-ef2536db96c9",
+      "x": 20,
+      "height": 51,
+      "text": "Untuk organisasi: SSO, audit log, dukungan prioritas, dan SLA."
+    }
+  ],
+  "tree": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "type": "root",
+    "children": [
+      {
+        "y": 0,
+        "children": [
+          {
+            "y": 32,
+            "name": "Pilih paket",
+            "width": 153,
+            "type": "text",
+            "textStyle": {
+              "fontFamily": "Source Sans Pro",
+              "fontWeight": "700",
+              "fontSize": 32,
+              "lineHeight": 1.2
+            },
+            "textColor": "#1f1e1d",
+            "id": "b71ff22c-fa83-808b-8008-ef2536d36f4f",
+            "x": 32,
+            "height": 38,
+            "text": "Pilih paket"
+          },
+          {
+            "y": 94,
+            "children": [
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Basic",
+                    "width": 42,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "600",
+                      "fontSize": 18,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#1f1e1d",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d51c2b",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Basic"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 49rb",
+                    "width": 97,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "700",
+                      "fontSize": 28,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#3366ff",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d5b634",
+                    "x": 20,
+                    "height": 34,
+                    "text": "Rp 49rb"
+                  },
+                  {
+                    "y": 92,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk mencoba. Satu proyek dan...",
+                    "width": 168,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "400",
+                      "fontSize": 14,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#5f5e5a",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk mencoba. Satu proyek dan sampai tiga anggota tim."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "stroke": {
+                  "color": "#e5e2da",
+                  "width": 1,
+                  "align": "inner"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Basic",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "radius": 12,
+                "id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+                "x": 0,
+                "height": 163
+              },
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Pro",
+                    "width": 29,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "600",
+                      "fontSize": 18,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#1f1e1d",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d70b4c",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Pro"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 149rb",
+                    "width": 112,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "700",
+                      "fontSize": 28,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#3366ff",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d871ac",
+                    "x": 20,
+                    "height": 34,
+                    "text": "Rp 149rb"
+                  },
+                  {
+                    "y": 92,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk tim kecil yang butuh...",
+                    "width": 168,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "400",
+                      "fontSize": 14,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#5f5e5a",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk tim kecil yang butuh proyek tanpa batas dan riwayat versi."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "stroke": {
+                  "color": "#e5e2da",
+                  "width": 1,
+                  "align": "inner"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Pro",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "radius": 12,
+                "id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+                "x": 224,
+                "height": 163
+              },
+              {
+                "y": 0,
+                "children": [
+                  {
+                    "y": 20,
+                    "name": "Bisnis",
+                    "width": 47,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "600",
+                      "fontSize": 18,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#1f1e1d",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536d9f840",
+                    "x": 20,
+                    "height": 22,
+                    "text": "Bisnis"
+                  },
+                  {
+                    "y": 50,
+                    "name": "Rp 0",
+                    "width": 137,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "700",
+                      "fontSize": 22,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#3366ff",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536da248c",
+                    "x": 20,
+                    "height": 26,
+                    "text": "Hubungi kami"
+                  },
+                  {
+                    "y": 84,
+                    "sizing": {
+                      "h": "fill"
+                    },
+                    "name": "Untuk organisasi: SSO, audit...",
+                    "width": 168,
+                    "type": "text",
+                    "textStyle": {
+                      "fontFamily": "Source Sans Pro",
+                      "fontWeight": "400",
+                      "fontSize": 14,
+                      "lineHeight": 1.2
+                    },
+                    "textColor": "#5f5e5a",
+                    "id": "b71ff22c-fa83-808b-8008-ef2536db96c9",
+                    "x": 20,
+                    "height": 51,
+                    "text": "Untuk organisasi: SSO, audit log, dukungan prioritas, dan SLA."
+                  }
+                ],
+                "sizing": {
+                  "h": "fill",
+                  "v": "auto"
+                },
+                "stroke": {
+                  "color": "#e5e2da",
+                  "width": 1,
+                  "align": "inner"
+                },
+                "layout": {
+                  "type": "flex",
+                  "direction": "column",
+                  "gap": {
+                    "row-gap": 8,
+                    "column-gap": 8
+                  },
+                  "padding": {
+                    "p1": 20,
+                    "p2": 20,
+                    "p3": 20,
+                    "p4": 20
+                  }
+                },
+                "name": "Card Bisnis",
+                "fill": "#ffffff",
+                "width": 208,
+                "type": "frame",
+                "radius": 12,
+                "id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+                "x": 448,
+                "height": 155
+              }
+            ],
+            "sizing": {
+              "h": "fix",
+              "v": "auto"
+            },
+            "layout": {
+              "type": "flex",
+              "direction": "row",
+              "gap": {
+                "row-gap": 16,
+                "column-gap": 16
+              },
+              "padding": {
+                "p1": 0,
+                "p2": 0,
+                "p3": 0,
+                "p4": 0
+              }
+            },
+            "name": "Cards",
+            "width": 656,
+            "type": "frame",
+            "id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+            "x": 32,
+            "height": 163
+          }
+        ],
+        "sizing": {
+          "v": "auto"
+        },
+        "layout": {
+          "type": "flex",
+          "direction": "column",
+          "gap": {
+            "row-gap": 24,
+            "column-gap": 24
+          },
+          "padding": {
+            "p1": 32,
+            "p2": 32,
+            "p3": 32,
+            "p4": 32
+          }
+        },
+        "name": "Pricing",
+        "fill": "#f4f1ea",
+        "width": 720,
+        "type": "frame",
+        "id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+        "x": 0,
+        "height": 289
+      }
+    ]
+  },
+  "objects": {
+    "b71ff22c-fa83-808b-8008-ef2536d8d1ff": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+      "name": "Untuk tim kecil yang butuh...",
+      "type": "text",
+      "x": 276,
+      "y": 186,
+      "width": 168,
+      "height": 51,
+      "rotation": 0,
+      "selrect": {
+        "x": 276,
+        "y": 186,
+        "width": 168,
+        "height": 51,
+        "x1": 276,
+        "y1": 186,
+        "x2": 444,
+        "y2": 237
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-height",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "14",
+                    "font-weight": "400",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "regular",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#5f5e5a",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Untuk tim kecil yang butuh proyek tanpa batas dan riwayat versi."
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "14",
+                "font-weight": "400",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "regular",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#5f5e5a",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      },
+      "layout-item-h-sizing": "fill"
+    },
+    "b71ff22c-fa83-808b-8008-ef2536da248c": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536da248c",
+      "name": "Rp 0",
+      "type": "text",
+      "x": 500,
+      "y": 144,
+      "width": 137,
+      "height": 26,
+      "rotation": 0,
+      "selrect": {
+        "x": 500,
+        "y": 144,
+        "width": 137,
+        "height": 26,
+        "x1": 500,
+        "y1": 144,
+        "x2": 637,
+        "y2": 170
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "22",
+                    "font-weight": "700",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "bold",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#3366ff",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Hubungi kami"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "22",
+                "font-weight": "700",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "bold",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#3366ff",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d5b634": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d5b634",
+      "name": "Rp 49rb",
+      "type": "text",
+      "x": 52,
+      "y": 144,
+      "width": 97,
+      "height": 34,
+      "rotation": 0,
+      "selrect": {
+        "x": 52,
+        "y": 144,
+        "width": 97,
+        "height": 34,
+        "x1": 52,
+        "y1": 144,
+        "x2": 149,
+        "y2": 178
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "28",
+                    "font-weight": "700",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "bold",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#3366ff",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Rp 49rb"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "28",
+                "font-weight": "700",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "bold",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#3366ff",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d4aeb1": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "name": "Card Basic",
+      "type": "frame",
+      "x": 32,
+      "y": 94,
+      "width": 208,
+      "height": 163,
+      "rotation": 0,
+      "selrect": {
+        "x": 32,
+        "y": 94,
+        "width": 208,
+        "height": 163,
+        "x1": 32,
+        "y1": 94,
+        "x2": 240,
+        "y2": 257
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "flip-x": null,
+      "flip-y": null,
+      "hide-fill-on-export": false,
+      "layout-gap-type": "multiple",
+      "layout-padding": {
+        "p1": 20,
+        "p2": 20,
+        "p3": 20,
+        "p4": 20
+      },
+      "layout-wrap-type": "nowrap",
+      "layout": "flex",
+      "layout-align-items": "start",
+      "layout-padding-type": "simple",
+      "r2": 12,
+      "layout-item-h-sizing": "fill",
+      "proportion-lock": false,
+      "layout-gap": {
+        "row-gap": 8,
+        "column-gap": 8
+      },
+      "layout-item-v-sizing": "auto",
+      "r3": 12,
+      "layout-justify-content": "start",
+      "r1": 12,
+      "layout-flex-dir": "column",
+      "layout-align-content": "stretch",
+      "strokes": [
+        {
+          "stroke-color": "#e5e2da",
+          "stroke-opacity": 1,
+          "stroke-width": 1,
+          "stroke-style": "solid",
+          "stroke-alignment": "inner"
+        }
+      ],
+      "proportion": 1,
+      "r4": 12,
+      "fills": [
+        {
+          "fill-color": "#ffffff",
+          "fill-opacity": 1
+        }
+      ],
+      "shapes": [
+        "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+        "b71ff22c-fa83-808b-8008-ef2536d5b634",
+        "b71ff22c-fa83-808b-8008-ef2536d51c2b"
+      ]
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d9f840": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d9f840",
+      "name": "Bisnis",
+      "type": "text",
+      "x": 500,
+      "y": 114,
+      "width": 47,
+      "height": 22,
+      "rotation": 0,
+      "selrect": {
+        "x": 500,
+        "y": 114,
+        "width": 47,
+        "height": 22,
+        "x1": 500,
+        "y1": 114,
+        "x2": 547,
+        "y2": 136
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "18",
+                    "font-weight": "600",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "600",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#1f1e1d",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Bisnis"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "18",
+                "font-weight": "600",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "600",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#1f1e1d",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d871ac": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d871ac",
+      "name": "Rp 149rb",
+      "type": "text",
+      "x": 276,
+      "y": 144,
+      "width": 112,
+      "height": 34,
+      "rotation": 0,
+      "selrect": {
+        "x": 276,
+        "y": 144,
+        "width": 112,
+        "height": 34,
+        "x1": 276,
+        "y1": 144,
+        "x2": 388,
+        "y2": 178
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "28",
+                    "font-weight": "700",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "bold",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#3366ff",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Rp 149rb"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "28",
+                "font-weight": "700",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "bold",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#3366ff",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536b7d56f": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "name": "Pricing",
+      "type": "frame",
+      "x": 0,
+      "y": 0,
+      "width": 720,
+      "height": 289,
+      "rotation": 0,
+      "selrect": {
+        "x": 0,
+        "y": 0,
+        "width": 720,
+        "height": 289,
+        "x1": 0,
+        "y1": 0,
+        "x2": 720,
+        "y2": 289
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "00000000-0000-0000-0000-000000000000",
+      "frame-id": "00000000-0000-0000-0000-000000000000",
+      "flip-x": null,
+      "flip-y": null,
+      "hide-fill-on-export": false,
+      "layout-gap-type": "multiple",
+      "layout-padding": {
+        "p1": 32,
+        "p2": 32,
+        "p3": 32,
+        "p4": 32
+      },
+      "layout-wrap-type": "nowrap",
+      "layout": "flex",
+      "layout-align-items": "start",
+      "layout-padding-type": "simple",
+      "r2": 0,
+      "proportion-lock": false,
+      "layout-gap": {
+        "row-gap": 24,
+        "column-gap": 24
+      },
+      "layout-item-v-sizing": "auto",
+      "r3": 0,
+      "layout-justify-content": "start",
+      "r1": 0,
+      "layout-flex-dir": "column",
+      "layout-align-content": "stretch",
+      "strokes": [],
+      "proportion": 1,
+      "r4": 0,
+      "fills": [
+        {
+          "fill-color": "#f4f1ea",
+          "fill-opacity": 1
+        }
+      ],
+      "shapes": [
+        "b71ff22c-fa83-808b-8008-ef2536d42326",
+        "b71ff22c-fa83-808b-8008-ef2536d36f4f"
+      ]
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d5df5d": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d5df5d",
+      "name": "Untuk mencoba. Satu proyek dan...",
+      "type": "text",
+      "x": 52,
+      "y": 186,
+      "width": 168,
+      "height": 51,
+      "rotation": 0,
+      "selrect": {
+        "x": 52,
+        "y": 186,
+        "width": 168,
+        "height": 51,
+        "x1": 52,
+        "y1": 186,
+        "x2": 220,
+        "y2": 237
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-height",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "14",
+                    "font-weight": "400",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "regular",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#5f5e5a",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Untuk mencoba. Satu proyek dan sampai tiga anggota tim."
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "14",
+                "font-weight": "400",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "regular",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#5f5e5a",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      },
+      "layout-item-h-sizing": "fill"
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d36f4f": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d36f4f",
+      "name": "Pilih paket",
+      "type": "text",
+      "x": 32,
+      "y": 32,
+      "width": 153,
+      "height": 38,
+      "rotation": 0,
+      "selrect": {
+        "x": 32,
+        "y": 32,
+        "width": 153,
+        "height": 38,
+        "x1": 32,
+        "y1": 32,
+        "x2": 185,
+        "y2": 70
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "32",
+                    "font-weight": "700",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "bold",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#1f1e1d",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Pilih paket"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "32",
+                "font-weight": "700",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "bold",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#1f1e1d",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536db96c9": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536db96c9",
+      "name": "Untuk organisasi: SSO, audit...",
+      "type": "text",
+      "x": 500,
+      "y": 178,
+      "width": 168,
+      "height": 51,
+      "rotation": 0,
+      "selrect": {
+        "x": 500,
+        "y": 178,
+        "width": 168,
+        "height": 51,
+        "x1": 500,
+        "y1": 178,
+        "x2": 668,
+        "y2": 229
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-height",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "14",
+                    "font-weight": "400",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "regular",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#5f5e5a",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Untuk organisasi: SSO, audit log, dukungan prioritas, dan SLA."
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "14",
+                "font-weight": "400",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "regular",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#5f5e5a",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      },
+      "layout-item-h-sizing": "fill"
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d70b4c": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d70b4c",
+      "name": "Pro",
+      "type": "text",
+      "x": 276,
+      "y": 114,
+      "width": 29,
+      "height": 22,
+      "rotation": 0,
+      "selrect": {
+        "x": 276,
+        "y": 114,
+        "width": 29,
+        "height": 22,
+        "x1": 276,
+        "y1": 114,
+        "x2": 305,
+        "y2": 136
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "18",
+                    "font-weight": "600",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "600",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#1f1e1d",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Pro"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "18",
+                "font-weight": "600",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "600",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#1f1e1d",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d42326": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "name": "Cards",
+      "type": "frame",
+      "x": 32,
+      "y": 94,
+      "width": 656,
+      "height": 163,
+      "rotation": 0,
+      "selrect": {
+        "x": 32,
+        "y": 94,
+        "width": 656,
+        "height": 163,
+        "x1": 32,
+        "y1": 94,
+        "x2": 688,
+        "y2": 257
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536b7d56f",
+      "flip-x": null,
+      "flip-y": null,
+      "hide-fill-on-export": false,
+      "layout-gap-type": "multiple",
+      "layout-padding": {
+        "p1": 0,
+        "p2": 0,
+        "p3": 0,
+        "p4": 0
+      },
+      "layout-wrap-type": "nowrap",
+      "layout": "flex",
+      "layout-align-items": "start",
+      "layout-padding-type": "simple",
+      "r2": 0,
+      "layout-item-h-sizing": "fix",
+      "proportion-lock": false,
+      "layout-gap": {
+        "row-gap": 16,
+        "column-gap": 16
+      },
+      "layout-item-v-sizing": "auto",
+      "r3": 0,
+      "layout-justify-content": "start",
+      "r1": 0,
+      "layout-flex-dir": "row",
+      "layout-align-content": "stretch",
+      "strokes": [],
+      "proportion": 1,
+      "r4": 0,
+      "fills": [],
+      "shapes": [
+        "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+        "b71ff22c-fa83-808b-8008-ef2536d6a826",
+        "b71ff22c-fa83-808b-8008-ef2536d4aeb1"
+      ]
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d94fb6": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d94fb6",
+      "name": "Card Bisnis",
+      "type": "frame",
+      "x": 480,
+      "y": 94,
+      "width": 208,
+      "height": 155,
+      "rotation": 0,
+      "selrect": {
+        "x": 480,
+        "y": 94,
+        "width": 208,
+        "height": 155,
+        "x1": 480,
+        "y1": 94,
+        "x2": 688,
+        "y2": 249
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "flip-x": null,
+      "flip-y": null,
+      "hide-fill-on-export": false,
+      "layout-gap-type": "multiple",
+      "layout-padding": {
+        "p1": 20,
+        "p2": 20,
+        "p3": 20,
+        "p4": 20
+      },
+      "layout-wrap-type": "nowrap",
+      "layout": "flex",
+      "layout-align-items": "start",
+      "layout-padding-type": "simple",
+      "r2": 12,
+      "layout-item-h-sizing": "fill",
+      "proportion-lock": false,
+      "layout-gap": {
+        "row-gap": 8,
+        "column-gap": 8
+      },
+      "layout-item-v-sizing": "auto",
+      "r3": 12,
+      "layout-justify-content": "start",
+      "r1": 12,
+      "layout-flex-dir": "column",
+      "layout-align-content": "stretch",
+      "strokes": [
+        {
+          "stroke-color": "#e5e2da",
+          "stroke-opacity": 1,
+          "stroke-width": 1,
+          "stroke-style": "solid",
+          "stroke-alignment": "inner"
+        }
+      ],
+      "proportion": 1,
+      "r4": 12,
+      "fills": [
+        {
+          "fill-color": "#ffffff",
+          "fill-opacity": 1
+        }
+      ],
+      "shapes": [
+        "b71ff22c-fa83-808b-8008-ef2536db96c9",
+        "b71ff22c-fa83-808b-8008-ef2536da248c",
+        "b71ff22c-fa83-808b-8008-ef2536d9f840"
+      ]
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d51c2b": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d51c2b",
+      "name": "Basic",
+      "type": "text",
+      "x": 52,
+      "y": 114,
+      "width": 42,
+      "height": 22,
+      "rotation": 0,
+      "selrect": {
+        "x": 52,
+        "y": 114,
+        "width": 42,
+        "height": 22,
+        "x1": 52,
+        "y1": 114,
+        "x2": 94,
+        "y2": 136
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d4aeb1",
+      "flip-x": null,
+      "flip-y": null,
+      "grow-type": "auto-width",
+      "content": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph-set",
+            "children": [
+              {
+                "line-height": "1.2",
+                "font-style": "normal",
+                "children": [
+                  {
+                    "line-height": "1.2",
+                    "font-style": "normal",
+                    "typography-ref-id": null,
+                    "text-transform": "none",
+                    "text-align": "left",
+                    "font-id": "sourcesanspro",
+                    "font-size": "18",
+                    "font-weight": "600",
+                    "typography-ref-file": null,
+                    "text-direction": "ltr",
+                    "font-variant-id": "600",
+                    "text-decoration": "none",
+                    "letter-spacing": "0",
+                    "fills": [
+                      {
+                        "fill-color": "#1f1e1d",
+                        "fill-opacity": 1
+                      }
+                    ],
+                    "font-family": "sourcesanspro",
+                    "text": "Basic"
+                  }
+                ],
+                "typography-ref-id": null,
+                "text-transform": "none",
+                "text-align": "left",
+                "font-id": "sourcesanspro",
+                "font-size": "18",
+                "font-weight": "600",
+                "typography-ref-file": null,
+                "text-direction": "ltr",
+                "type": "paragraph",
+                "font-variant-id": "600",
+                "text-decoration": "none",
+                "letter-spacing": "0",
+                "fills": [
+                  {
+                    "fill-color": "#1f1e1d",
+                    "fill-opacity": 1
+                  }
+                ],
+                "font-family": "sourcesanspro"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "b71ff22c-fa83-808b-8008-ef2536d6a826": {
+      "id": "b71ff22c-fa83-808b-8008-ef2536d6a826",
+      "name": "Card Pro",
+      "type": "frame",
+      "x": 256,
+      "y": 94,
+      "width": 208,
+      "height": 163,
+      "rotation": 0,
+      "selrect": {
+        "x": 256,
+        "y": 94,
+        "width": 208,
+        "height": 163,
+        "x1": 256,
+        "y1": 94,
+        "x2": 464,
+        "y2": 257
+      },
+      "points": null,
+      "transform": null,
+      "transform-inverse": null,
+      "parent-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "frame-id": "b71ff22c-fa83-808b-8008-ef2536d42326",
+      "flip-x": null,
+      "flip-y": null,
+      "hide-fill-on-export": false,
+      "layout-gap-type": "multiple",
+      "layout-padding": {
+        "p1": 20,
+        "p2": 20,
+        "p3": 20,
+        "p4": 20
+      },
+      "layout-wrap-type": "nowrap",
+      "layout": "flex",
+      "layout-align-items": "start",
+      "layout-padding-type": "simple",
+      "r2": 12,
+      "layout-item-h-sizing": "fill",
+      "proportion-lock": false,
+      "layout-gap": {
+        "row-gap": 8,
+        "column-gap": 8
+      },
+      "layout-item-v-sizing": "auto",
+      "r3": 12,
+      "layout-justify-content": "start",
+      "r1": 12,
+      "layout-flex-dir": "column",
+      "layout-align-content": "stretch",
+      "strokes": [
+        {
+          "stroke-color": "#e5e2da",
+          "stroke-opacity": 1,
+          "stroke-width": 1,
+          "stroke-style": "solid",
+          "stroke-alignment": "inner"
+        }
+      ],
+      "proportion": 1,
+      "r4": 12,
+      "fills": [
+        {
+          "fill-color": "#ffffff",
+          "fill-opacity": 1
+        }
+      ],
+      "shapes": [
+        "b71ff22c-fa83-808b-8008-ef2536d8d1ff",
+        "b71ff22c-fa83-808b-8008-ef2536d871ac",
+        "b71ff22c-fa83-808b-8008-ef2536d70b4c"
+      ]
+    }
+  }
+}
