@@ -1486,6 +1486,38 @@
         (update :link-reports (fnil conj [])
                 (assoc report :scope (if (= scope-id uuid/zero) "page" (str scope-id)))))))
 
+(defn- op-link-tokens
+  "Links raw fill and stroke colors of the page or a board's subtree to the
+  color tokens with the same value (see `penpot-mcp.link/link-tokens`)."
+  [state op]
+  (props/check-keys! op [:op :scope :fills :strokes :prefer] "for linkTokens")
+  (let [objects  (objects-of state)
+        scope    (:scope op)
+        scope-id (if (or (nil? scope) (= "page" scope)) uuid/zero (resolve-id state scope "scope"))
+        _        (when-not (contains? objects scope-id)
+                   (error! (str "Shape " scope-id " not found on this page") {:field "scope"}))
+        fills?   (not (false? (bool! (:fills op) "fills")))
+        strokes? (not (false? (bool! (:strokes op) "strokes")))
+        _        (when-not (or fills? strokes?)
+                   (error! "linkTokens needs fills or strokes" {:field "fills"}))
+        index    (tokens/color-index (:tokens state))
+        _        (when (empty? index)
+                   (error! "The file has no color tokens in its active sets (see get_tokens / edit_tokens)"
+                           {:field "op"}))
+        prefer   (link/parse-token-prefer index (:prefer op))
+        ids      (if (= scope-id uuid/zero)
+                   (into [] (remove #(= % uuid/zero)) (keys objects))
+                   (cfh/get-children-ids-with-self objects scope-id))
+        {:keys [shapes report]}
+        (link/link-tokens objects ids (:tokens state) {:fills? fills? :strokes? strokes? :prefer prefer})]
+    (-> state
+        (cond-> (seq shapes)
+          (update :changes pcb/update-shapes (vec (keys shapes))
+                  (fn [shape] (assoc shape :applied-tokens (get-in shapes [(:id shape) :applied-tokens])))
+                  {:attrs #{:applied-tokens}}))
+        (update :link-reports (fnil conj [])
+                (assoc report :op "linkTokens" :scope (if (= scope-id uuid/zero) "page" (str scope-id)))))))
+
 ;; --- groups and boolean shapes
 
 (declare shape!)
@@ -2190,6 +2222,7 @@
     "delete" (op-delete state op)
     "move" (op-move state op)
     "linkassets" (op-link-assets state op)
+    "linktokens" (op-link-tokens state op)
     "annotate" (op-annotate state op)
     "makevariants" (op-make-variants state op)
     "setvariant" (op-set-variant state op)
@@ -2203,7 +2236,7 @@
     "deleteflow" (op-delete-flow state op)
     (error! (str "Unknown op " (pr-str (:op op))
                  ". Use create, update, delete, move, group, ungroup, boolean, makeComponent, "
-                 "makeVariants, setVariant, swap, detach, resetOverrides, annotate, linkAssets, flow or deleteFlow")
+                 "makeVariants, setVariant, swap, detach, resetOverrides, annotate, linkAssets, linkTokens, flow or deleteFlow")
             {:field "op"})))
 
 (defn- apply-op*
