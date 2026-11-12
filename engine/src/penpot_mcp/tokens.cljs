@@ -814,6 +814,26 @@
    {:props {} :applied {}}
    m))
 
+;; --- linking raw colors to color tokens (edit_page linkTokens)
+
+(defn color-index
+  "{[\"#rrggbb\" opacity] [token ...]} of the color tokens in `tokens` (name ->
+  token) that resolve to a hex color; opacity from #rrggbbaa (1 otherwise).
+  Each token carries ::reference? (its value is a reference to another token)."
+  [tokens]
+  (reduce (fn [m [token-name token]]
+            (if (not= :color (:type token))
+              m
+              (let [v (try (resolve-value tokens (:value token)) (catch :default _ nil))
+                    c (hex-color v)]
+                (if c
+                  (update m [(:color c) (:opacity c)] (fnil conj [])
+                          (assoc token :name token-name
+                                 ::reference? (boolean (re-find #"\{" (str (:value token))))))
+                  m))))
+          {}
+          tokens))
+
 ;; --- propagation: shapes follow token edits and theme switches
 
 (defn- resolved-or-error

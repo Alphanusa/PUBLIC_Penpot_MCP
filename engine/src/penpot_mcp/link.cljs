@@ -22,6 +22,7 @@
    [app.common.types.text :as txt]
    [cuerdas.core :as str]
    [penpot-mcp.library :as library]
+   [penpot-mcp.tokens :as tokens]
    [penpot-mcp.util :as u]))
 
 ;; --- values
@@ -248,4 +249,135 @@
      :report (cond-> {}
                colors? (assoc :colors (report acc own-file-id :color))
                typographies? (assoc :typographies (report acc own-file-id :typography))
+               (pos? skipped) (assoc :skippedInCopies skipped))}))
+
+;; --- linking to color tokens (linkTokens)
+
+(defn parse-token-prefer
+  "`prefer` ({\"#02d8fa\": \"color.primary.500\"}, a key may also be
+  \"#02d8fa1a\" for an alpha) -> {[hex opacity] token-name}. The token must
+  exist in `index` under that value."
+  [index prefer]
+  (when (some? prefer)
+    (when-not (map? prefer)
+      (u/error! "prefer must map colors to token names, e.g. {\"#02d8fa\": \"color.primary.500\"}"
+                {:field "prefer" :value prefer}))
+    (into {}
+          (map (fn [[k v]]
+                 (let [s (str/lower (name k))
+                       [_ h a] (or (re-matches #"^(#[0-9a-f]{6})([0-9a-f]{2})?$" s)
+                                   (u/error! (str "prefer: " (pr-str (name k)) " is not a #rrggbb or #rrggbbaa color")
+                                             {:field "prefer" :value (name k)}))
+                       op (if a (/ (js/Math.round (* (/ (js/parseInt a 16) 255) 100)) 100) 1)
+                       k  [h op]]
+                   (when-not (some #(= (str v) (:name %)) (get index k))
+                     (u/error! (str "prefer: no color token " (pr-str v) " with the value " (name k))
+                               {:field "prefer" :value v}))
+                   [k (str v)])))
+          prefer)))
+
+(defn- pick-token
+  "[status token-name-or-names] for the color key `k`: the only token, the
+  preferred one, the only one that is not a reference to another token, or
+  :ambiguous / :unmatched."
+  [index prefer k]
+  (let [cs (get index k)
+        direct (remove ::tokens/reference? cs)]
+    (cond
+      (empty? cs) [:unmatched nil]
+      (contains? prefer k) [:linked (get prefer k)]
+      (= 1 (count cs)) [:linked (:name (first cs))]
+      (= 1 (count direct)) [:linked (:name (first direct))]
+      :else [:ambiguous (vec (sort (map :name cs)))])))
+
+(defn- solid-key
+  [color opacity]
+  (when (string? color) (color-key color opacity)))
+
+(defn- text-fill-key
+  "The one solid fill color of every text node of a text, or nil (mixed,
+  gradient, none)."
+  [shape]
+  (let [ks (into #{}
+                 (map (fn [node]
+                        (let [fills (:fills node)
+                              f (first fills)]
+                          (when (= 1 (count fills)) (solid-key (:fill-color f) (:fill-opacity f))))))
+                 (txt/node-seq txt/is-text-node? (:content shape)))]
+    (when (and (= 1 (count ks)) (some? (first ks))) (first ks))))
+
+(defn- shape-fill-key
+  [shape]
+  (if (cfh/text-shape? shape)
+    (text-fill-key shape)
+    (let [fills (:fills shape)
+          f (first fills)]
+      (when (= 1 (count fills)) (solid-key (:fill-color f) (:fill-opacity f))))))
+
+(defn- shape-stroke-key
+  [shape]
+  (let [s (first (:strokes shape))]
+    (when s (solid-key (:stroke-color s) (:stroke-opacity s)))))
+
+(defn- token-record
+  [acc attr k [status x] shape-id]
+  (let [label (color-label k)
+        entry (fn [e init] (update (or e init) :shapes (fnil conj #{}) shape-id))]
+    (case status
+      :linked    (-> acc
+                     (update-in [:linked x] entry {:value label})
+                     (update :links (fnil inc 0)))
+      :ambiguous (update-in acc [:ambiguous k] entry {:value label :candidates x})
+      :unmatched (update-in acc [:unmatched k] entry {:value label :attr attr}))))
+
+(defn- link-shape-tokens
+  [ctx acc shape]
+  (let [applied (:applied-tokens shape)
+        id (:id shape)
+        step (fn [[acc applied] attr k]
+               (if (or (nil? k) (contains? applied attr))
+                 [acc applied]
+                 (let [[status x :as r] (pick-token (:index ctx) (:prefer ctx) k)
+                       acc (token-record acc attr k r id)]
+                   [acc (cond-> applied (= :linked status) (assoc attr x))])))
+        [acc applied'] (-> [acc (or applied {})]
+                           (step :fill (when (:fills? ctx) (shape-fill-key shape)))
+                           (step :stroke-color (when (:strokes? ctx) (shape-stroke-key shape))))]
+    [acc (when (not= (or applied {}) applied') (assoc shape :applied-tokens applied'))]))
+
+(defn- token-entries
+  [m f]
+  (->> m
+       (map (fn [[k e]] (assoc (f k e) :shapes (count (:shapes e)))))
+       (sort-by (comp - :shapes))
+       (vec)))
+
+(defn link-tokens
+  "Links the raw fill and stroke colors of the shapes `ids` of `objects` to
+  the color tokens (`tokens`, name -> token of the active sets) with exactly
+  that value — hex and opacity, #rrggbbaa tokens for translucent colors —
+  by recording them as applied tokens, as the Tokens panel does. Values do
+  not change. Fills are linked when a shape has one solid fill (texts: one
+  color for the whole text), strokes on the first stroke. Properties that
+  already have a token, and shapes inside component copies, are left alone.
+
+  opts: `:fills?`, `:strokes?`, `:prefer` (from `parse-token-prefer`).
+  Returns {:shapes {id shape} :report}."
+  [objects ids tokens {:keys [fills? strokes? prefer]}]
+  (let [index (tokens/color-index tokens)
+        ctx {:index index :prefer prefer :fills? fills? :strokes? strokes?}
+        [acc shapes skipped]
+        (reduce (fn [[acc out skipped] id]
+                  (let [shape (get objects id)]
+                    (cond
+                      (nil? shape) [acc out skipped]
+                      (ctk/in-component-copy? shape) [acc out (inc skipped)]
+                      :else (let [[acc shape'] (link-shape-tokens ctx acc shape)]
+                              [acc (cond-> out shape' (assoc id shape')) skipped]))))
+                [{} {} 0]
+                ids)]
+    {:shapes shapes
+     :report (cond-> {:linked (token-entries (:linked acc) (fn [n e] {:token n :value (:value e)}))
+                      :ambiguous (token-entries (:ambiguous acc) (fn [_ e] (select-keys e [:value :candidates])))
+                      :unmatched (token-entries (:unmatched acc) (fn [_ e] {:value (:value e)}))}
                (pos? skipped) (assoc :skippedInCopies skipped))}))

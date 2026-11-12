@@ -9,6 +9,7 @@ import { engineFunction, HeadlessEngine } from "./HeadlessEngine";
 import { FONT_WEIGHTS, readFontInfo } from "./fontInfo";
 import { binarySourceSchema, loadBinary } from "./sources";
 import { PenpotCredentials } from "./PenpotCredentials";
+import { expandIconOps } from "./iconify";
 
 const BROWSER_FREE =
     "Works without the Penpot MCP plugin and without anyone opening Penpot in a browser: " +
@@ -261,7 +262,7 @@ tokens, prototypes, workflow).
 
 create — {"op":"create","type":<type>,"ref":"myCard","parent":<board/group id or ref>, ...props}
   type: "frame" (board), "rect", "ellipse", "text", "image" ({"image":<media id>,"fit"?}), "svg" ({"svg":"<svg…>",
-  "color"?} imported as editable vectors), "path" ({"d":"M0 0 L24 12 L0 24 Z"}), or "component" (a copy:
+  "color"?} imported as editable vectors; or {"icon":"material-symbols:add"} to fetch it from Iconify), "path" ({"d":"M0 0 L24 12 L0 24 Z"}), or "component" (a copy:
   {"component":"Buttons / Button","variant"?:{"Type":"Primary"},"texts"?:{"Label":"Save"}}).
   parent: omit for the page root. x, y are relative to the parent; inside a flex/grid layout the layout places it.
 update — {"op":"update","id":<id or ref>, ...props}   (only the given props change)
@@ -281,6 +282,13 @@ detach — {"op":"detach","id":<copy>}   resetOverrides — {"op":"resetOverride
 annotate — {"op":"annotate","id":<main>,"annotation":"…"|null}
 linkAssets — {"op":"linkAssets","scope"?:<board>|"page","colors"?:true,"typographies"?:false,"prefer"?:{"#fff":"Surface"}}
   links raw colors/text styles to library assets with exactly that value (reports ambiguous and unmatched values).
+linkTokens — {"op":"linkTokens","scope"?:<board>|"page","fills"?:true,"strokes"?:true,"prefer"?:{"#02d8fa":"color.primary.500"}}
+  records the color tokens (active sets) with exactly the value of raw fills/strokes as applied tokens, like the
+  Tokens panel; translucent colors match #rrggbbaa tokens. Values don't change; reports unmatched values.
+importIcons — {"op":"importIcons","icons":["material-symbols:add","mdi:server-outline",…],"parent":<board>,
+  "size"?:24,"color"?:"#1f2937","prefix"?:"Icon","components"?:true} fetches Iconify icons (any open set) and creates
+  per icon a size×size board with the vectors inside, made a component "<prefix> / <set> / <name>" (up to 500
+  icons per call; put them in a wrapping flex board to lay them out).
 flow — {"op":"flow","name":"Onboarding","start":<top-level board>}   deleteFlow — {"op":"deleteFlow","name"}
 Editing a main component updates its copies on every page of the file (copiesUpdated in the result).
 
@@ -358,12 +366,13 @@ export class EditPageTool extends HeadlessTool<EditPageArgs> {
 
     protected async executeCore(args: EditPageArgs): Promise<ToolResponse> {
         const ctx = this.credentials.context();
+        const ops = await expandIconOps(args.ops);
         const result = await this.engine.wasm((engine) =>
             engine.applyOps({
                 ...ctx,
                 fileId: args.fileId,
                 pageId: args.pageId,
-                ops: args.ops,
+                ops,
                 dryRun: args.dryRun ?? false,
             })
         );
@@ -1636,6 +1645,10 @@ const GUIDES: Record<string, string> = {
   "color": "#1f2937", "parent": <board>} imports the markup as editable shapes in a group (like pasting an SVG).
   "color" paints every fill and stroke (icon tinting; a library color name keeps it linked). Embedded bitmaps
   are skipped.
+- Iconify (any open icon set, e.g. the Material Symbols the code uses): {"op": "create", "type": "svg", "icon":
+  "material-symbols:add", "color": "#1f2937", "parent": <board>} fetches the icon; {"op": "importIcons", "icons":
+  ["material-symbols:add", "mdi:server-outline"], "parent": <wrapping flex board>, "size": 24, "color": "#1f2937"}
+  builds a whole icon library, one component per icon named "Icon / <set> / <name>".
 - {"op": "create", "type": "path", "d": "M0 0 L24 12 L0 24 Z", "fill": "#e8593c"}: d is in the parent's
   coordinates; x/y move it, width/height scale it. Without fill or stroke it gets a 1px black centered stroke.
 - update "color" on an svg group recolors it; update "d" changes a path.
@@ -1680,6 +1693,9 @@ const GUIDES: Record<string, string> = {
   "strokeWidth", "rotation", "shadow", "typography", "fontSize", "fontFamily", "fontWeight", "lineHeight",
   "letterSpacing", "textCase", "textDecoration"}. Shapes follow token edits and theme switches automatically.
 - Preview a theme without switching it: render_shape {"theme": "Mode/Dark"}.
+- Existing designs: edit_page {"op": "linkTokens", "scope": "page"} links every raw fill/stroke color that equals a
+  color token (hex + alpha; add #rrggbbaa tokens for translucent colors first), without changing values; run it per
+  page and read the unmatched list in the result.
 - Values: references "{color.blue.500}", math "{space.2} * 2", rem (16px). Typography tokens are objects
   {"fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration"}; shadow
   tokens lists of {"offsetX", "offsetY", "blur", "spread", "color" ("#rrggbbaa" for alpha), "inset"}.`,
