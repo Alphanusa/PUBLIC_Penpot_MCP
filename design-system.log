@@ -1,0 +1,13 @@
+--- variants
+--- copies
+--- vectors
+--- effects and rich text
+--- grid layout, layout items, constraints
+--- tokens: typography, shadow, stroke width, rotation, sizing, DTCG
+--- audit_design
+--- prototypes, flows, export settings
+--- delete
+{
+  "ok": true,
+  "failures": []
+}
